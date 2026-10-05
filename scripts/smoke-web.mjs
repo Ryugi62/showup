@@ -158,6 +158,9 @@ try {
   await guestPage.goto(`http://127.0.0.1:${WEB}/book.html?shop=${newShop}&owner=0x0000000000000000000000000000000000000001`);
   await guestPage.waitForSelector("#anyway", { timeout: 20000 });
   if (!(await guestPage.isDisabled("#go"))) throw new Error("booking must stay disabled on owner mismatch");
+  await guestPage.click("#anyway");
+  await guestPage.waitForFunction(() => document.getElementById("terms").textContent.includes("Owner differs from your link"), null, { timeout: 20000 });
+  if ((await guestPage.textContent("#terms")).includes("✓ Owner matches")) throw new Error("false reassurance after mismatch");
   // a plain browser (no wallet) on the check-in link gets the "open in wallet app" path, not a dead button
   const plain = await (await browser.newContext()).newPage();
   await plain.goto(`http://127.0.0.1:${WEB}/checkin.html#p=${out.address}.1.1.0x${"ab".repeat(65)}`);

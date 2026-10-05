@@ -21,8 +21,8 @@
 <div id="settings" hidden>
 <h2>Shop settings</h2>
 <div class="card">
-  <div class="row"><div><b>Check-in key</b><div class="muted" id="signerInfo"></div></div><div><button class="ghost" id="mkdev">Use a key on this device</button> <button class="ghost" id="resetSigner" hidden>Reset check-in key to this wallet</button></div></div>
-  <p class="muted">Keep the owner wallet off the counter: a separate check-in key on the shop's tablet signs passes without a wallet prompt. It can only authorize check-ins (which refund the guest who booked) — never claim, pause, change settings or withdraw. It is stored in this browser only — create it in the browser the tablet will use at the counter. If site data is cleared, create a new one here. To submit check-ins without any wallet, send the key about $1 of USDC for fees.</p>
+  <div class="row"><div><b>Check-in key</b><div class="muted" id="signerInfo"></div></div><div><button class="ghost" id="mkdev">Use a key on this device</button> <button class="ghost" id="resetSigner" hidden>Reset check-in key to this wallet</button> <button class="ghost" id="sweep" hidden>Sweep key's USDC to payout</button></div></div>
+  <p class="muted">Keep the owner wallet off the counter: a separate check-in key on the shop's tablet signs passes without a wallet prompt. It can only authorize check-ins (which refund the guest who booked) — never claim, pause, change settings or withdraw. It is stored in this browser only — create it in the browser the tablet will use at the counter. If site data is cleared, create a new one here. To submit check-ins without any wallet, send the key about $1 of USDC for fees (keep it under $5; "Sweep" moves it to your payout address).</p>
 </div>
 <div class="card">
   <label for="payout">Payout address</label><input id="payout" class="mono">

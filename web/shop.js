@@ -1,5 +1,5 @@
 // Page script for shop.html (external so the Content-Security-Policy can forbid inline scripts).
-import { readShop, connect, signPass, claim, release, checkIn, checkInFromDevice, balanceOf, txUrl, addrUrl, nowSec, registerShop, bookingsOfShop, currentAccount, hasWallet, deviceKey, createDeviceKey, setSigner, setPayout, setActive, transferShop } from "./chain.js";
+import { readShop, connect, signPass, claim, release, checkIn, checkInFromDevice, balanceOf, deviceCheckInFloor, sweepDeviceKey, txUrl, addrUrl, nowSec, registerShop, bookingsOfShop, currentAccount, hasWallet, deviceKey, createDeviceKey, setSigner, setPayout, setActive, transferShop } from "./chain.js";
 import { CONFIG } from "./config.js";
 import { formatUsdc, actionsFor, STATUS, escapeHtml, encodePass, parseUsdc, formatSlot, recordLabel, secondsLeft } from "./domain.js";
 import { $, msg, fail, walletBanner } from "./ui.js";
@@ -50,7 +50,14 @@ function renderSettings() {
   const dev = deviceKey(shop.id);
   const usingDev = dev && dev.address.toLowerCase() === shop.signer.toLowerCase();
   $("signerInfo").innerHTML = `Current: <span class="mono">${shop.signer.slice(0, 10)}…</span> ${usingDev ? "(this device)" : shop.signer.toLowerCase() === shop.owner.toLowerCase() ? "(the owner wallet)" : ""}`;
+  if (dev) {
+    balanceOf(dev.address).then((b) => {
+      $("signerInfo").innerHTML += `<br>This device's key: <span class="mono">${dev.address}</span> <button class="ghost" id="copyKeyAddr">Copy</button> · balance ${formatUsdc(b)} USDC (for submitting check-ins without a wallet)`;
+      $("copyKeyAddr").onclick = async () => { try { await navigator.clipboard.writeText(dev.address); $("copyKeyAddr").textContent = "Copied"; } catch { prompt("Key address", dev.address); } };
+    }).catch(() => {});
+  }
   $("mkdev").hidden = !!usingDev;
+  $("sweep").hidden = !deviceKey(shop.id);
   // the stored device key was lost (site data cleared) or belongs to another device: let the owner take signing back
   $("resetSigner").hidden = usingDev || shop.signer.toLowerCase() === shop.owner.toLowerCase();
   $("payout").value = shop.payout;
@@ -59,6 +66,10 @@ function renderSettings() {
 $("mkdev").onclick = async () => {
   try { const dev = deviceKey(shop.id) || createDeviceKey(shop.id); msg("Confirm the key change in your wallet…");
     const r = await setSigner(shop.id, dev.address); msg(`This device now signs check-in passes · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); await render(); } catch (e) { fail(e); }
+};
+$("sweep").onclick = async () => {
+  if (!confirm(`Move this device key's USDC to the payout address ${shop.payout}?`)) return;
+  try { const r = await sweepDeviceKey(shop.id, shop.payout); msg(`Swept to payout · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); } catch (e) { fail(e); }
 };
 $("resetSigner").onclick = async () => {
   try { const r = await setSigner(shop.id, currentAccount()); msg(`This wallet signs check-in passes again · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); await render(); } catch (e) { fail(e); }
@@ -106,7 +117,8 @@ $("tablet").onclick = async () => {
     let r;
     if (deviceIsSigner() && !walletIsSigner() && !isOwner()) {
       const dev = deviceKey(shop.id);
-      if ((await balanceOf(dev.address)) === 0n) { msg(`This device's check-in key has no USDC for the ~1¢ fee. Send about $1 of USDC on Arc to <span class="mono">${dev.address}</span>, or let the guest submit from their phone.`, "err"); return; }
+      const [bal, floor] = await Promise.all([balanceOf(dev.address), deviceCheckInFloor()]);
+      if (bal < floor) { msg(`This device's check-in key has no USDC (or too little) for the ~1¢ fee. Send about $1 of USDC on Arc to <span class="mono">${dev.address}</span> — keep it under $5, it lives in this browser — or let the guest submit from their phone.`, "err"); return; }
       msg("Submitting the check-in from this device's key (~1¢ fee)…");
       r = await checkInFromDevice(shop.id, pass.id, pass.validUntil, pass.sig);
     } else {

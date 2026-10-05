@@ -171,6 +171,25 @@ export async function checkInFromDevice(shopId, bookingId, validUntil, sig) {
 }
 export const balanceOf = (a) => pub.getBalance({ address: a });
 
+/** Fee floor for a device-key check-in: estimated gas × current price, with 2× headroom. */
+export async function deviceCheckInFloor() {
+  const price = await pub.getGasPrice();
+  return 2n * 120_000n * price; // checkIn uses ~60–90k gas; keep 2× margin
+}
+
+/** Move whatever the device key holds (minus the transfer fee) to the shop's payout address. */
+export async function sweepDeviceKey(shopId, to) {
+  const dev = deviceKey(shopId);
+  if (!dev) throw new Error("No check-in key on this device.");
+  const [bal, price] = await Promise.all([pub.getBalance({ address: dev.address }), pub.getGasPrice()]);
+  const fee = 21_000n * price * 2n;
+  if (bal <= fee) throw new Error("Nothing to sweep.");
+  const w = createWalletClient({ account: dev, chain: arc, transport: http(CONFIG.rpc) });
+  const hash = await w.sendTransaction({ to, value: bal - fee, gas: 21_000n, maxFeePerGas: price * 2n, maxPriorityFeePerGas: 0n });
+  await pub.waitForTransactionReceipt({ hash });
+  return { hash };
+}
+
 /** Sign with the device key if it is the shop's current signer; otherwise with the connected wallet. */
 export async function signPass(bookingId, validUntil, shop) {
   const td = passTypedData({ chainId: CONFIG.chainId, contract: address(), bookingId, validUntil });

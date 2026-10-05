@@ -18,7 +18,8 @@ async function loadShop() {
   const expectOwner = q.get("owner");
   const linkShop = q.get("shop");
   if (expectOwner && !linkShop) { $("terms").textContent = "This link has an owner but no shop number, so it can't be checked. Ask the shop for its link again."; return; }
-  if (expectOwner && linkShop === String(s.id) && expectOwner.toLowerCase() !== s.owner.toLowerCase()) {
+  const mismatch = !!expectOwner && linkShop === String(s.id) && expectOwner.toLowerCase() !== s.owner.toLowerCase();
+  if (mismatch) {
     $("title").textContent = s.name;
     $("terms").innerHTML = `<b class="danger">This shop's owner does not match the link you were given.</b> The link says <span class="mono">${escapeHtml(expectOwner)}</span>, but shop #${s.id} now belongs to <span class="mono">${s.owner}</span>. That happens if the shop was transferred, or if the link was altered. <button class="ghost" id="anyway">I trust this shop — continue</button>`;
     await new Promise((resolve) => { $("anyway").onclick = resolve; });
@@ -28,7 +29,7 @@ async function loadShop() {
   $("title").textContent = `Book at ${s.name}`;
   const cw = Number(s.cancelWindow) / 60, gr = Number(s.grace) / 60;
   const now0 = await nowSec();
-  $("terms").innerHTML = `Deposit ${formatUsdc(s.deposit)} USDC. Free cancel ${cw ? `until ${cw} min before your time` : "until your time"}. Refunded the moment you check in. If you don't come, the shop can claim it ${gr} min after your time.<br><span class="muted">Shop record (on chain): owner <a class="mono" href="${addrUrl(s.owner)}">${s.owner.slice(0, 10)}…</a> · since ${new Date(Number(s.since) * 1000).toLocaleDateString()} · ${s.uniqueCustomers} guests · ${s.checkedIn} checked in · ${s.claimed} no-shows claimed · ${recordLabel(s, now0)}.${expectOwner ? " ✓ Owner matches your link." : " Open the shop's own link (it carries the owner address) to have it checked automatically."}</span>`;
+  $("terms").innerHTML = `Deposit ${formatUsdc(s.deposit)} USDC. Free cancel ${cw ? `until ${cw} min before your time` : "until your time"}. Refunded the moment you check in. If you don't come, the shop can claim it ${gr} min after your time.<br><span class="muted">Shop record (on chain): owner <a class="mono" href="${addrUrl(s.owner)}">${s.owner.slice(0, 10)}…</a> · since ${new Date(Number(s.since) * 1000).toLocaleDateString()} · ${s.uniqueCustomers} guests · ${s.checkedIn} checked in · ${s.claimed} no-shows claimed · ${recordLabel(s, now0)}.${mismatch ? ' <b class="danger">⚠ Owner differs from your link (you chose to continue).</b>' : expectOwner ? " ✓ Owner matches your link." : " Open the shop's own link (it carries the owner address) to have it checked automatically."}</span>`;
   const d = new Date(Date.now() + (Number(s.cancelWindow) + 7200) * 1000); d.setMinutes(0, 0, 0); // ≥ 1 h after the cutoff
   $("slot").value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   $("go").disabled = !hasWallet();
