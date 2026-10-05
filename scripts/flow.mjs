@@ -86,8 +86,9 @@ export async function runFlow({ chainId, rpc, ownerPk, customerPk, deposit, log 
   const owedTotal = await read("totalOwed");
   const bal = await pub.getBalance({ address });
   if (bal < held + owedTotal) throw new Error("contract balance below held + owed");
-  const [booked, refunded, claimed] = await read("shopStats", [shopId]);
-  log(`statuses: A=${STATUS[2]} B=${STATUS[3]} · shop stats booked ${booked} refunded ${refunded} claimed ${claimed} · balance ${formatEther(bal)} ≥ held ${formatEther(held)} + owed ${formatEther(owedTotal)}`);
+  const [booked, checkedIn, , , , claimed] = await read("shopStats", [shopId]);
+  if (booked !== 2n || checkedIn !== 1n || claimed !== 1n) throw new Error("shop stats do not match the flow");
+  log(`statuses: A=${STATUS[2]} B=${STATUS[3]} · shop stats booked ${booked} checked in ${checkedIn} claimed ${claimed} · balance ${formatEther(bal)} ≥ held ${formatEther(held)} + owed ${formatEther(owedTotal)}`);
   return { address, shopId: shopId.toString(), bookingA: idA.toString(), bookingB: idB.toString(), receipts };
 }
 
