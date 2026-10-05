@@ -35,3 +35,5 @@ label { display: block; font-size: 14px; color: var(--sub); margin: 14px 0 6px; 
 code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
 a { color: var(--blue); }
 #qr { display: flex; justify-content: center; padding: 16px; background: #fff; border-radius: 12px; }
+#qr svg { max-width: 100%; height: auto; }
+h3 { font-size: 16px; margin: 20px 0 8px; color: var(--sub); }

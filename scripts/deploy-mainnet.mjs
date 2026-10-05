@@ -10,10 +10,15 @@ const RPC = process.env.ARC_RPC || "https://rpc.mainnet.arc.io";
 const CHAIN_ID = 5042;
 const envPath = process.argv[2];
 if (!envPath) { console.error("usage: node scripts/deploy-mainnet.mjs <deployer.env>"); process.exit(2); }
-const env = Object.fromEntries(readFileSync(envPath, "utf8").split("\n").filter(Boolean).map((l) => l.split("=")));
+const parseEnv = (t) => Object.fromEntries(t.split("\n").map((l) => l.trim()).filter((l) => l && l.includes("=")).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+const env = parseEnv(readFileSync(envPath, "utf8"));
 const ownerPk = env.ARC_DEPLOYER_PK;
 let customerPk = env.ARC_CUSTOMER_PK;
-if (!customerPk) { customerPk = generatePrivateKey(); appendFileSync(envPath, `ARC_CUSTOMER_PK=${customerPk}\n`); }
+if (!customerPk) {
+  customerPk = generatePrivateKey();
+  const cur = readFileSync(envPath, "utf8");
+  appendFileSync(envPath, `${cur.endsWith("\n") ? "" : "\n"}ARC_CUSTOMER_PK=${customerPk}\n`);
+}
 
 const chain = chainFor(CHAIN_ID, RPC);
 const pub = createPublicClient({ chain, transport: http(RPC), pollingInterval: 200 });
@@ -45,4 +50,10 @@ saveRun(new URL("../runs/mainnet.json", import.meta.url), run);
 const cfgPath = new URL("../web/config.js", import.meta.url);
 const cfg = readFileSync(cfgPath, "utf8").replace(/contract: "[^"]*"/, `contract: "${out.address}"`).replace(/demoShopId: \d+/, `demoShopId: ${out.shopId}`);
 writeFileSync(cfgPath, cfg);
+// README: replace the block between the markers with the real addresses, hashes, fees and times
+const ex = "https://explorer.arc.io";
+const rows = out.receipts.map((r) => `| ${r.label} | [${r.hash.slice(0, 10)}…](${ex}/tx/${r.hash}) | ${r.gasUsed} | ${Number(r.feeUsdc).toFixed(5)} | ${r.ms} |`).join("\n");
+const block = `<!-- MAINNET:START -->\n**Arc mainnet (chain 5042)** · contract [\`${out.address}\`](${ex}/address/${out.address}) · deployed ${run.at.slice(0, 16).replace("T", " ")} UTC · demo shop #${out.shopId}: booking #${out.bookingA} refunded at check-in, booking #${out.bookingB} claimed as a no-show.\n\n| action | tx | gas | fee (USDC) | send→final (ms) |\n|---|---|---|---|---|\n${rows}\n<!-- MAINNET:END -->`;
+const readmePath = new URL("../README.md", import.meta.url);
+writeFileSync(readmePath, readFileSync(readmePath, "utf8").replace(/<!-- MAINNET:START -->[\s\S]*<!-- MAINNET:END -->/, block));
 console.log(`MAINNET OK ${out.address}`);

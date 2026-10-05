@@ -4,10 +4,14 @@
   "type": "module",
   "scripts": {
     "test": "forge test && node --test tests/*.test.mjs",
-    "e2e": "node scripts/e2e-anvil.mjs"
+    "e2e": "node scripts/e2e-anvil.mjs",
+    "vendor": "esbuild scripts/vendor-entry.js --bundle --format=esm --minify --outfile=web/vendor/viem.js && cp node_modules/qrcode-generator/qrcode.js web/vendor/qrcode.js",
+    "abi": "forge build --silent && node scripts/gen-abi.mjs"
   },
   "devDependencies": {
+    "esbuild": "^0.24.2",
     "playwright": "^1.57.0",
+    "qrcode-generator": "^1.4.4",
     "viem": "^2.21.0"
   }
 }

@@ -64,6 +64,22 @@ contract ShowUpTest is Test {
         su.registerShop(payable(address(0)), signer, D, CANCEL_WINDOW, GRACE, "x");
         vm.expectRevert(ShowUp.BadConfig.selector);
         su.registerShop(payout, address(0), D, CANCEL_WINDOW, GRACE, "x");
+        vm.expectRevert(ShowUp.BadConfig.selector); // grace below the 5-minute floor
+        su.registerShop(payout, signer, D, CANCEL_WINDOW, 4 minutes, "x");
+        vm.expectRevert(ShowUp.BadConfig.selector); // grace above 1 day
+        su.registerShop(payout, signer, D, CANCEL_WINDOW, 1 days + 1, "x");
+        vm.expectRevert(ShowUp.BadConfig.selector); // cancel window above 30 days
+        su.registerShop(payout, signer, D, 30 days + 1, GRACE, "x");
+    }
+
+    function test_book_needsMinimumLeadTime_evenWithZeroCancelWindow() public {
+        vm.prank(owner);
+        uint256 s0 = su.registerShop(payout, signer, D, 0, 5 minutes, "walk-in");
+        vm.prank(alice);
+        vm.expectRevert(ShowUp.SlotTooSoon.selector);
+        su.book{value: D}(s0, uint64(block.timestamp + 59));
+        vm.prank(alice);
+        su.book{value: D}(s0, uint64(block.timestamp + 60));
     }
 
     // --- booking ---
@@ -303,5 +319,189 @@ contract ShowUpTest is Test {
         }
         assertEq(address(su).balance, held);
         assertEq(su.totalHeld(), held);
+    }
+
+    // ---- v2: bounds, recovery, stats, indexes, replay, signer types, failed transfers ----
+    function test_reclaim_customerRecoversIfShopVanishes() public {
+        uint256 id = _book(alice);
+        vm.warp(slot + GRACE + 30 days - 1);
+        vm.prank(alice);
+        vm.expectRevert(ShowUp.TooEarly.selector);
+        su.reclaim(id);
+        vm.warp(slot + GRACE + 30 days);
+        vm.prank(bob);
+        vm.expectRevert(ShowUp.NotAllowed.selector);
+        su.reclaim(id);
+        vm.prank(alice);
+        su.reclaim(id);
+        assertEq(alice.balance, 100 ether);
+    }
+
+    function test_transferShop_andSetPayout() public {
+        address newOwner = makeAddr("newOwner");
+        address payable newPayout = payable(makeAddr("newPayout"));
+        vm.prank(alice);
+        vm.expectRevert(ShowUp.NotAllowed.selector);
+        su.transferShop(shopId, alice);
+        vm.prank(owner);
+        su.transferShop(shopId, newOwner);
+        vm.prank(newOwner);
+        su.setPayout(shopId, newPayout);
+        uint256 id = _book(alice);
+        vm.warp(slot + GRACE);
+        vm.prank(owner);
+        vm.expectRevert(ShowUp.NotAllowed.selector);
+        su.claim(id);
+        vm.prank(newOwner);
+        su.claim(id);
+        assertEq(newPayout.balance, D);
+    }
+
+    function test_stats_countRefundsAndClaims() public {
+        uint256 a = _book(alice);
+        uint256 b = _book(bob);
+        uint64 vu = uint64(block.timestamp + 1 hours);
+        bytes memory pass = _pass(signerPk, a, vu);
+        su.checkIn(a, vu, pass);
+        vm.warp(slot + GRACE);
+        vm.prank(owner);
+        su.claim(b);
+        (uint64 booked, uint64 refunded, uint64 claimed) = su.shopStats(shopId);
+        assertEq(booked, 2);
+        assertEq(refunded, 1);
+        assertEq(claimed, 1);
+    }
+
+    function test_indexes_listBookingsByShopAndCustomer() public {
+        uint256 a1 = _book(alice);
+        uint256 b1 = _book(bob);
+        uint256 a2 = _book(alice);
+        uint256[] memory s = su.bookingsOfShop(shopId, 0, 10);
+        assertEq(s.length, 3);
+        assertEq(s[0], a1); assertEq(s[1], b1); assertEq(s[2], a2);
+        uint256[] memory c = su.bookingsOfCustomer(alice, 0, 10);
+        assertEq(c.length, 2);
+        assertEq(c[1], a2);
+        uint256[] memory page = su.bookingsOfShop(shopId, 2, 10);
+        assertEq(page.length, 1);
+        assertEq(su.bookingsOfShop(shopId, 9, 10).length, 0);
+    }
+
+    function test_crossInstanceReplay_rejected() public {
+        ShowUp other = new ShowUp();
+        vm.prank(owner);
+        uint256 otherShop = other.registerShop(payout, signer, D, CANCEL_WINDOW, GRACE, "Cafe Lumia");
+        uint256 id = _book(alice);
+        vm.prank(alice);
+        uint256 otherId = other.book{value: D}(otherShop, slot);
+        assertEq(id, otherId);
+        uint64 vu = uint64(block.timestamp + 1 hours);
+        bytes memory pass = _pass(signerPk, id, vu); // signed for `su`
+        vm.expectRevert(ShowUp.BadPass.selector);
+        other.checkIn(otherId, vu, pass);
+    }
+
+    function test_crossChainReplay_rejected() public {
+        uint256 id = _book(alice);
+        uint64 vu = uint64(block.timestamp + 1 hours);
+        bytes memory pass = _pass(signerPk, id, vu); // chain 31337
+        vm.chainId(5042);
+        vm.expectRevert(ShowUp.BadPass.selector);
+        su.checkIn(id, vu, pass);
+    }
+
+    function test_recover_rejectsBadLengthBadVAndZero() public {
+        uint256 id = _book(alice);
+        uint64 vu = uint64(block.timestamp + 1 hours);
+        vm.expectRevert(ShowUp.BadPass.selector);
+        su.checkIn(id, vu, hex"1234");
+        bytes memory p = _pass(signerPk, id, vu);
+        p[64] = bytes1(uint8(29));
+        vm.expectRevert(ShowUp.BadPass.selector);
+        su.checkIn(id, vu, p);
+        bytes memory zero = new bytes(65);
+        zero[64] = bytes1(uint8(27));
+        vm.expectRevert(ShowUp.BadPass.selector);
+        su.checkIn(id, vu, zero);
+    }
+
+    function test_eip1271_contractSigner() public {
+        Mock1271 w = new Mock1271(signer);
+        vm.prank(owner);
+        su.setSigner(shopId, address(w));
+        uint256 id = _book(alice);
+        uint64 vu = uint64(block.timestamp + 1 hours);
+        bytes memory pass = _pass(signerPk, id, vu);
+        su.checkIn(id, vu, pass);
+        assertEq(alice.balance, 100 ether);
+        uint256 id2 = _book(alice);
+        bytes memory wrong = _pass(0xBAD, id2, vu);
+        vm.expectRevert(ShowUp.BadPass.selector);
+        su.checkIn(id2, vu, wrong);
+    }
+
+    function test_failedTransfer_becomesWithdrawable() public {
+        Refuser r = new Refuser(su);
+        vm.deal(address(r), 10 ether);
+        uint256 id = r.doBook(shopId, slot, D);
+        vm.prank(owner);
+        su.release(id); // refund to a contract that rejects plain transfers
+        assertEq(uint8(su.statusOf(id)), uint8(ShowUp.Status.Refunded));
+        assertEq(su.owed(address(r)), D);
+        assertEq(su.totalOwed(), D);
+        r.setAccept(true);
+        r.doWithdraw();
+        assertEq(su.owed(address(r)), 0);
+        assertEq(address(r).balance, 10 ether);
+        vm.expectRevert(ShowUp.NothingOwed.selector);
+        r.doWithdraw();
+    }
+
+    function test_reentrancy_onRefund_isContained() public {
+        Reenter m = new Reenter(su);
+        vm.deal(address(m), 10 ether);
+        uint256 id = m.doBook(shopId, slot, D);
+        m.arm(id);
+        vm.prank(owner);
+        su.release(id);
+        // re-entry attempt failed inside the receiver, so the refund was parked as owed, paid once
+        assertEq(su.owed(address(m)) + address(m).balance, 10 ether);
+        assertEq(address(su).balance, su.totalHeld() + su.totalOwed());
+    }
+
+    function test_forcedEther_doesNotBreakAccounting() public {
+        _book(alice);
+        vm.deal(address(su), address(su).balance + 3 ether); // like a selfdestruct push
+        assertGe(address(su).balance, su.totalHeld() + su.totalOwed());
+    }
+}
+
+contract Mock1271 {
+    address internal immutable expected;
+    constructor(address e) { expected = e; }
+    function isValidSignature(bytes32 h, bytes calldata sig) external view returns (bytes4) {
+        address got = ecrecover(h, uint8(sig[64]), bytes32(sig[0:32]), bytes32(sig[32:64]));
+        return got == expected ? bytes4(0x1626ba7e) : bytes4(0xffffffff);
+    }
+}
+
+contract Refuser {
+    ShowUp internal su;
+    bool internal accept;
+    constructor(ShowUp s) { su = s; }
+    function setAccept(bool a) external { accept = a; }
+    function doBook(uint256 shop, uint64 slot, uint256 d) external returns (uint256) { return su.book{value: d}(shop, slot); }
+    function doWithdraw() external { su.withdraw(); }
+    receive() external payable { require(accept, "no"); }
+}
+
+contract Reenter {
+    ShowUp internal su;
+    uint256 internal target;
+    constructor(ShowUp s) { su = s; }
+    function arm(uint256 id) external { target = id; }
+    function doBook(uint256 shop, uint64 slot, uint256 d) external returns (uint256) { return su.book{value: d}(shop, slot); }
+    receive() external payable {
+        if (target != 0) { uint256 t = target; target = 0; su.cancel(t); }
     }
 }

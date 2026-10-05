@@ -11,7 +11,9 @@ Arc is the reason this works: gas is paid in USDC (about one cent, priced in dol
 - **Status**: `Held` → `Refunded` (cancelled in time, checked in, or released by the shop) or `Claimed` (no-show after grace).
 - **Check-in pass**: an EIP-712 signature by the shop's check-in signer over (`bookingId`, `validUntil`). The shop's screen shows it as a QR; the customer submits it.
 - **Free-cancel window**: the customer can cancel for a full refund until `slotStart - cancelWindow`.
-- **Grace**: the shop can claim only after `slotStart + grace`.
+- **Grace**: the shop can claim only after `slotStart + grace` (5 min – 1 day, fixed at registration).
+- **Shop record**: on-chain counters booked / refunded / claimed per shop — the public claim rate.
+- **Owed**: a payout that could not be pushed, withdrawable by its recipient.
 
 ## Success criteria (numbers)
 1. Contract tests: 100% of the Given/When/Then cases below pass, plus fuzz tests (≥256 runs each) showing that the contract balance always equals the sum of `Held` deposits.
@@ -33,6 +35,13 @@ Arc is the reason this works: gas is paid in USDC (about one cent, priced in dol
 - G `Held` · W shop releases (shop cancelled the slot, or forgives) · T `Refunded`, customer +D.
 - G anyone other than the customer / the shop owner · W cancel / claim / release · T revert `NotAllowed`.
 - G shop deactivated · W new booking · T revert `ShopInactive`; existing bookings still settle.
+- G grace < 5 min or > 1 day, or cancel window > 30 days · W register · T revert `BadConfig` (terms are fixed after registration).
+- G cancel window 0 · W book a slot < 60 s away · T revert `SlotTooSoon`.
+- G `Held`, now ≥ slotStart + grace + 30 days · W customer reclaims · T `Refunded` (escape hatch if the shop vanished); earlier → `TooEarly`.
+- G a pass signed for another ShowUp instance or another chain · W check in · T revert `BadPass`.
+- G shop signer is a contract wallet · W check in with a signature it accepts (EIP-1271) · T `Refunded`.
+- G refund recipient rejects the transfer · W any settlement · T booking still settles, amount parked in `owed`, `withdraw` pays it once.
+- G any sequence of actions · T contract balance = totalHeld + totalOwed (+ forced transfers), and shopStats equals the per-state counts.
 
 ## Non-goals
 Payments for the meal or service itself · fiat on-ramp · disputes beyond the release rule · ERC-20 approvals (deposits use Arc's native USDC value) · upgradeability · admin keys (no owner can move deposits).

@@ -5,52 +5,65 @@
 <header class="top"><a href="./">ShowUp</a><nav><a href="book.html">Book</a><a href="shop.html">For shops</a></nav></header>
 <h1 id="title">Book a slot</h1>
 <p class="lead" id="terms">Loading shop…</p>
+<div id="nowallet" class="card" hidden></div>
 <label for="shop">Shop number</label><input id="shop" type="number" min="1" value="1">
-<label for="slot">Your time</label><input id="slot" type="datetime-local">
-<p><button id="go">Lock deposit and book</button></p>
-<div id="msg"></div>
-<h2>My bookings</h2><div id="mine" class="muted">Connect your wallet by booking, or <button class="ghost" id="conn">connect</button>.</div>
+<label for="slot">Your time <span class="muted" id="tz"></span></label><input id="slot" type="datetime-local">
+<p><button id="go" disabled>Lock deposit and book</button></p>
+<div id="msg" aria-live="polite"></div>
+<h2>My bookings</h2><div id="mine" class="muted">Connect your wallet to see your bookings. <button class="ghost" id="conn">Connect</button></div>
 </main>
 <script type="module">
-import { book, cancel, readShop, readBooking, connect, txUrl, pub, nowSec, abi } from "./chain.js";
-import { formatUsdc, actionsFor, STATUS, escapeHtml } from "./domain.js";
+import { book, cancel, withdraw, readShop, readBooking, connect, txUrl, nowSec, bookingsOfCustomer, pub, hasWallet } from "./chain.js";
 import { CONFIG } from "./config.js";
-const $ = (id) => document.getElementById(id), msg = (t, c = "") => { $("msg").className = c; $("msg").innerHTML = t; };
-const q = new URLSearchParams(location.search); if (q.get("shop")) $("shop").value = q.get("shop");
-let shop;
+import { abi } from "./abi.js";
+import { formatUsdc, actionsFor, STATUS, escapeHtml, formatSlot } from "./domain.js";
+import { $, msg, fail, walletBanner } from "./ui.js";
+const q = new URLSearchParams(location.search); $("shop").value = q.get("shop") || CONFIG.demoShopId || 1;
+$("tz").textContent = "(" + Intl.DateTimeFormat().resolvedOptions().timeZone + ")";
+walletBanner($("nowallet"));
+let shop, me;
 async function loadShop() {
-  shop = await readShop($("shop").value);
-  if (shop.owner === "0x0000000000000000000000000000000000000000") { $("terms").textContent = "No such shop."; return; }
-  $("title").textContent = `Book at ${shop.name}`;
-  $("terms").textContent = `Deposit ${formatUsdc(shop.deposit)} USDC · free cancel until ${Number(shop.cancelWindow) / 60} min before · refunded instantly when you check in · claimable by the shop ${Number(shop.grace) / 60} min after your slot if you don't come.`;
-  const d = new Date(Date.now() + (Number(shop.cancelWindow) + 3600) * 1000); d.setMinutes(0, 0, 0);
+  $("go").disabled = true; shop = null;
+  const s = await readShop($("shop").value);
+  if (!s.exists) { $("title").textContent = "Book a slot"; $("terms").textContent = "No shop with that number."; return; }
+  if (!s.active) { $("title").textContent = s.name; $("terms").textContent = "This shop is not taking bookings right now."; return; }
+  shop = s;
+  $("title").textContent = `Book at ${s.name}`;
+  const cw = Number(s.cancelWindow) / 60, gr = Number(s.grace) / 60;
+  $("terms").textContent = `Deposit ${formatUsdc(s.deposit)} USDC. Free cancel ${cw ? `until ${cw} min before your time` : "until your time"}. Refunded the moment you check in. If you don't come, the shop can claim it ${gr} min after your time. This shop: ${s.booked} booked, ${s.refunded} refunded, ${s.claimed} claimed.`;
+  const d = new Date(Date.now() + (Number(s.cancelWindow) + 7200) * 1000); d.setMinutes(0, 0, 0); // ≥ 1 h after the cutoff
   $("slot").value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  $("go").disabled = !hasWallet();
 }
-$("shop").onchange = () => loadShop().catch((e) => msg(e.message, "err"));
+$("shop").oninput = () => loadShop().catch(fail);
 $("go").onclick = async () => {
   try {
-    $("go").disabled = true; msg("Confirm in your wallet…");
+    if (!shop) return;
     const slot = Math.floor(new Date($("slot").value).getTime() / 1000);
+    const now = Number(await nowSec()), lead = Math.max(Number(shop.cancelWindow), 60);
+    if (!Number.isFinite(slot) || slot < now + lead) { msg(`Pick a time at least ${Math.ceil(lead / 60)} min from now.`, "err"); return; }
+    $("go").disabled = true; msg("Confirm in your wallet…");
     const r = await book(shop.id, slot, shop.deposit);
-    msg(`Booked and final in ${r.ms} ms · <a href="${txUrl(r.hash)}">view on explorer</a>`, "ok"); listMine();
-  } catch (e) { msg(e.shortMessage || e.message, "err"); } finally { $("go").disabled = false; }
+    msg(`Booked for ${formatSlot(slot)}. Confirmed in ${r.ms} ms · <a href="${txUrl(r.hash)}">view on explorer</a>`, "ok"); listMine();
+  } catch (e) { fail(e); } finally { $("go").disabled = !shop || !hasWallet(); }
 };
-let me;
 async function listMine() {
   me = me || await connect();
-  const n = await pub.readContract({ address: CONFIG.contract, abi, functionName: "bookingCount" });
-  const now = await nowSec(), out = [];
-  for (let i = n; i >= 1n && out.length < 10; i--) {
-    const b = await readBooking(i); if (b.customer.toLowerCase() !== me.toLowerCase()) continue;
-    const s = await readShop(b.shopId), a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
-    out.push(`<div class="card row"><div><b>#${b.id}</b> · ${escapeHtml(s.name)}<div class="muted">${new Date(Number(b.slotStart) * 1000).toLocaleString()} · ${formatUsdc(b.amount)} USDC</div></div><div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}</span> ${a.cancel ? `<button class="ghost" data-c="${b.id}">Cancel</button>` : ""}</div></div>`);
+  const [mine, now, owedAmt] = await Promise.all([bookingsOfCustomer(me), nowSec(), pub.readContract({ address: CONFIG.contract, abi, functionName: "owed", args: [me] })]);
+  const shops = {};
+  const rows = [];
+  for (const b of mine) {
+    const s = shops[b.shopId] ||= await readShop(b.shopId);
+    const a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
+    rows.push(`<div class="card row"><div><b>#${b.id}</b> · ${escapeHtml(s.name)}<div class="muted">${formatSlot(b.slotStart)} · ${formatUsdc(b.amount)} USDC</div></div><div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}</span> ${a.cancel ? `<button class="ghost" data-c="${b.id}">Cancel (full refund)</button>` : ""}</div></div>`);
   }
-  $("mine").innerHTML = out.join("") || "No bookings from this wallet yet.";
+  $("mine").innerHTML = (owedAmt > 0n ? `<div class="card row"><div>${formatUsdc(owedAmt)} USDC is waiting for you (a payout your wallet could not receive automatically).</div><button id="wd">Withdraw</button></div>` : "") + (rows.join("") || "No bookings from this wallet yet.");
   document.querySelectorAll("[data-c]").forEach((btn) => btn.onclick = async () => {
-    try { const r = await cancel(btn.dataset.c); msg(`Cancelled, refunded in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine(); } catch (e) { msg(e.shortMessage || e.message, "err"); }
+    try { btn.disabled = true; const r = await cancel(btn.dataset.c); msg(`Cancelled and refunded in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine(); } catch (e) { fail(e); btn.disabled = false; }
   });
+  $("wd")?.addEventListener("click", async () => { try { const r = await withdraw(); msg(`Withdrawn · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine(); } catch (e) { fail(e); } });
 }
-$("conn").onclick = () => listMine().catch((e) => msg(e.message, "err"));
-loadShop().catch((e) => msg(e.message, "err"));
+$("conn").onclick = () => listMine().catch(fail);
+loadShop().catch(fail);
 </script>
 </body></html>

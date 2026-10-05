@@ -12,5 +12,5 @@ evm_version = "cancun"
 runs = 256
 
 [invariant]
-runs = 64
-depth = 32
+runs = 256
+depth = 100

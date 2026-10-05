@@ -4,37 +4,44 @@
 <body><main>
 <header class="top"><a href="./">ShowUp</a><nav><a href="book.html">Book</a><a href="shop.html">For shops</a><a href="https://github.com/Ryugi62/showup">Code</a></nav></header>
 <h1>A $5 deposit that comes back the moment you walk in.</h1>
-<p class="lead">Shops lose tables and appointments to no-shows, but a card deposit costs more in fees and chargebacks than it protects. ShowUp holds a small USDC deposit on Arc. Show up, and the shop's check-in pass refunds it at the door in under a second. Don't, and the shop can claim it after your slot. Nobody can take it early — there is no admin key.</p>
+<p class="lead">Shops lose tables and appointments to no-shows, and a card deposit doesn't pay for itself: on $5, a typical 2.9% + 30¢ card fee takes about 9%, and a card refund takes 5–10 business days (<a href="https://stripe.com/pricing">Stripe pricing</a>, <a href="https://support.stripe.com/questions/refunds-faq">refunds FAQ</a>). ShowUp holds the deposit in USDC on Arc instead. Check in, and it is back in your wallet before you sit down. Don't, and the shop can claim it after your slot.</p>
 
 <ol class="steps">
-  <li><b>Book.</b> The customer locks the shop's deposit (e.g. 5 USDC) for a time slot. Free cancellation until the shop's cutoff.</li>
-  <li><b>Walk in.</b> The shop shows a one-time QR (an EIP-712 pass signed by its check-in key). Scanning it refunds the deposit to the customer's wallet.</li>
-  <li><b>Or don't.</b> After the slot plus a grace period, only the shop can claim the deposit, only to its payout address.</li>
+  <li><b>Book.</b> Lock the shop's deposit for a time slot. Free cancellation until the shop's cutoff.</li>
+  <li><b>Walk in.</b> The shop shows a QR — a check-in pass signed by its key, valid for two minutes. Submitting it refunds the deposit to the wallet that booked (the shop's tablet can submit it, so the guest needs no gas).</li>
+  <li><b>Or don't.</b> Only after the slot plus the shop's grace period (at least 5 minutes) can the shop claim it, and only to its payout address.</li>
 </ol>
 
 <h2>Live on Arc mainnet</h2>
-<div id="live" class="muted">Loading from chain…</div>
+<div id="live" class="muted" aria-live="polite">Loading from chain…</div>
 
 <h2>Why Arc</h2>
-<div class="card">Gas is paid in USDC and costs about a cent, priced in dollars — so a $5 deposit is worth protecting. Finality is sub-second, so the refund settles before the customer reaches the table. On a $5 card deposit, a typical online card rate of 2.9% + 30¢ takes about 45¢ (9%), and a card refund takes 5–10 business days to reach the customer (<a href="https://stripe.com/pricing">Stripe pricing</a>, <a href="https://support.stripe.com/questions/refunds-faq">Stripe refunds FAQ</a>).</div>
-<p class="muted">Read-only page: no wallet needed. Contract and every transaction link to the Arc explorer.</p>
+<div class="card">On Arc, USDC is the gas. The deposit and the fee come out of one dollar balance: a guest needs no second token to book, and a shop needs no ETH to run. Each action costs about a cent, so a $5 deposit is worth protecting. Finality is sub-second, so the refund is final before the guest reaches the table. Measured fees and confirmation times are in the <a href="https://github.com/Ryugi62/showup#arc-mainnet">README</a>.</div>
+
+<h2>Trust model</h2>
+<div class="card">The shop attests that you came by signing your pass. A shop could withhold the pass and claim anyway — so every shop's record is public: bookings, refunds and no-show claims are counted on chain and shown above as its claim rate. No admin key exists; the deployer cannot touch deposits. If a shop disappears, the guest can take a still-held deposit back 30 days after the slot.</div>
+<p class="muted">Read-only page: no wallet needed. The contract links to the Arc explorer, where every transaction is visible.</p>
 </main>
 <script type="module">
 import { CONFIG } from "./config.js";
 import { overview, deployed, addrUrl, nowSec } from "./chain.js";
-import { formatUsdc, STATUS, actionsFor, escapeHtml as esc } from "./domain.js";
+import { formatUsdc, STATUS, actionsFor, escapeHtml as esc, formatSlot, claimRate } from "./domain.js";
 const el = document.getElementById("live");
 async function render() {
   if (!deployed()) { el.textContent = "Contract address not configured yet."; return; }
   const [o, now] = await Promise.all([overview(), nowSec()]);
+  const shops = Object.values(o.shops).filter((s) => s.exists).map((s) => {
+    const rate = claimRate(s.refunded, s.claimed);
+    return `<div class="card row"><div><b>${esc(s.name)}</b> <span class="muted">#${s.id}</span><div class="muted">deposit ${formatUsdc(s.deposit)} USDC · ${s.booked} booked · ${s.refunded} refunded · ${s.claimed} claimed${rate === null ? "" : ` · claim rate ${rate}%`}</div></div><a class="btn" href="book.html?shop=${s.id}">Book</a></div>`;
+  }).join("");
   const rows = o.bookings.map((b) => {
     const s = o.shops[b.shopId.toString()];
     const a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
-    const when = new Date(Number(b.slotStart) * 1000).toLocaleString();
-    return `<div class="card row"><div><b>#${b.id}</b> · ${esc(s.name)}<div class="muted">slot ${when} · ${formatUsdc(b.amount)} USDC · <span class="mono">${b.customer.slice(0, 8)}…</span></div></div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}${STATUS[b.status] === "Held" ? " · " + a.phase : ""}</span></div>`;
+    return `<div class="card row"><div><b>#${b.id}</b> · ${esc(s.name)}<div class="muted">${formatSlot(b.slotStart)} · ${formatUsdc(b.amount)} USDC · <span class="mono">${b.customer.slice(0, 8)}…</span></div></div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}${STATUS[b.status] === "Held" ? " · " + a.phase : ""}</span></div>`;
   }).join("");
   el.innerHTML = `<div class="grid3"><div class="card"><div class="muted">Shops</div><div class="stat">${o.shopCount}</div></div><div class="card"><div class="muted">Bookings</div><div class="stat">${o.bookingCount}</div></div><div class="card"><div class="muted">Deposits held now</div><div class="stat">${formatUsdc(o.totalHeld)} USDC</div></div></div>
-  <p class="muted">Contract <a class="mono" href="${addrUrl(CONFIG.contract)}">${CONFIG.contract}</a> on Arc (chain ${CONFIG.chainId})</p>${rows || '<p class="muted">No bookings yet.</p>'}`;
+  <p class="muted">Contract <a class="mono" href="${addrUrl(CONFIG.contract)}">${CONFIG.contract}</a> on Arc (chain ${CONFIG.chainId})</p>
+  <h3>Shops</h3>${shops || '<p class="muted">No shops yet.</p>'}<h3>Latest bookings</h3>${rows || '<p class="muted">No bookings yet.</p>'}`;
 }
 render().catch((e) => { el.textContent = "Could not read the chain: " + e.message; });
 </script>

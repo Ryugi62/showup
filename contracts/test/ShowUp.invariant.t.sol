@@ -66,8 +66,24 @@ contract Handler is Test {
         try su.claim(id) { paidOut += D; } catch {}
     }
 
+    function reclaim(uint256 seed) external {
+        uint256 id = _pick(seed);
+        if (id == 0) return;
+        (, address c,,,) = su.bookings(id);
+        vm.prank(c);
+        try su.reclaim(id) { paidOut += D; } catch {}
+    }
+
+    function donate(uint96 amt) external {
+        uint256 a = bound(amt, 1, 5 ether);
+        vm.deal(address(su), address(su).balance + a);
+        donated += a;
+    }
+
+    uint256 public donated;
+
     function travel(uint32 secs) external {
-        vm.warp(block.timestamp + bound(secs, 1, 2 days));
+        vm.warp(block.timestamp + bound(secs, 1, 40 days));
     }
 
     function _pick(uint256 seed) internal view returns (uint256) {
@@ -88,13 +104,31 @@ contract ShowUpInvariantTest is Test {
         targetContract(address(h));
     }
 
-    /// The contract never holds more or less than the sum of Held deposits.
-    function invariant_balanceEqualsTotalHeld() public view {
-        assertEq(address(su).balance, su.totalHeld());
+    /// Every held deposit and every parked payout is backed; forced transfers only add a surplus.
+    function invariant_solvent() public view {
+        assertEq(address(su).balance, su.totalHeld() + su.totalOwed() + h.donated());
     }
 
     /// Money in = money still held + money paid out; nothing is created or lost.
     function invariant_conservation() public view {
-        assertEq(h.paidIn(), su.totalHeld() + h.paidOut());
+        assertEq(h.paidIn(), su.totalHeld() + h.paidOut() + su.totalOwed());
+    }
+
+    /// Every booking is in exactly one state, and the public shop counters agree with them.
+    function invariant_statesAndStats() public view {
+        uint256 n = su.bookingCount();
+        uint256 held; uint256 refunded; uint256 claimed;
+        for (uint256 i = 1; i <= n; i++) {
+            ShowUp.Status st = su.statusOf(i);
+            if (st == ShowUp.Status.Held) held++;
+            else if (st == ShowUp.Status.Refunded) refunded++;
+            else if (st == ShowUp.Status.Claimed) claimed++;
+            else revert("booking in None state");
+        }
+        (uint64 b, uint64 r, uint64 c) = su.shopStats(h.shopId());
+        assertEq(b, n);
+        assertEq(r, refunded);
+        assertEq(c, claimed);
+        assertEq(su.totalHeld(), held * h.D());
     }
 }

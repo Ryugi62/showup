@@ -49,8 +49,9 @@ export async function runFlow({ chainId, rpc, ownerPk, customerPk, deposit, log 
     log(`deploy                 ${hash}  -> ${address}  fee ${formatEther(feeWei)} USDC`);
   }
 
-  // 1. shop: cancel window 0 and grace 0 so the no-show path can be shown within minutes
-  await send("registerShop", wOwner, { functionName: "registerShop", args: [owner.address, owner.address, deposit, 0n, 0n, "ShowUp demo shop"] });
+  // 1. shop: no cancel window and the minimum 5-minute grace, so the no-show path can be shown within minutes
+  const GRACE = 300;
+  await send("registerShop", wOwner, { functionName: "registerShop", args: [owner.address, owner.address, deposit, 0n, BigInt(GRACE), "ShowUp demo shop"] });
   const shopId = await read("shopCount");
 
   // 2. booking A → customer checks in with a pass signed by the shop → refund
@@ -72,18 +73,21 @@ export async function runFlow({ chainId, rpc, ownerPk, customerPk, deposit, log 
   const slotB = BigInt(Math.floor(Date.now() / 1000)) + BigInt(slotDelaySec);
   await send("book (B, no-show)", wCust, { functionName: "book", args: [shopId, slotB], value: deposit });
   const idB = await read("bookingCount");
-  if (warp) await warp(slotDelaySec + 1);
+  const waitSec = slotDelaySec + GRACE + 5;
+  if (warp) await warp(waitSec);
   else {
-    log(`waiting ${slotDelaySec + 5}s for slot B to pass…`);
-    await sleep((slotDelaySec + 5) * 1000);
+    log(`waiting ${waitSec}s for slot B + grace to pass…`);
+    await sleep(waitSec * 1000);
   }
   await send("claim (B)", wOwner, { functionName: "claim", args: [idB] });
   if ((await read("statusOf", [idB])) !== 3) throw new Error("B not Claimed");
 
   const held = await read("totalHeld");
+  const owedTotal = await read("totalOwed");
   const bal = await pub.getBalance({ address });
-  if (held !== bal) throw new Error("balance != totalHeld");
-  log(`statuses: A=${STATUS[2]} B=${STATUS[3]} · contract balance ${formatEther(bal)} = totalHeld ${formatEther(held)}`);
+  if (bal < held + owedTotal) throw new Error("contract balance below held + owed");
+  const [booked, refunded, claimed] = await read("shopStats", [shopId]);
+  log(`statuses: A=${STATUS[2]} B=${STATUS[3]} · shop stats booked ${booked} refunded ${refunded} claimed ${claimed} · balance ${formatEther(bal)} ≥ held ${formatEther(held)} + owed ${formatEther(owedTotal)}`);
   return { address, shopId: shopId.toString(), bookingA: idA.toString(), bookingB: idB.toString(), receipts };
 }
 

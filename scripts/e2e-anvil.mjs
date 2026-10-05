@@ -24,7 +24,7 @@ async function main() {
     const ownerPk = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     const customerPk = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
     const out = await runFlow({
-      chainId: 5042, rpc, ownerPk, customerPk, deposit: parseEther("0.1"), slotDelaySec: 120,
+      chainId: 5042, rpc, ownerPk, customerPk, deposit: parseEther("0.1"), slotDelaySec: 75,
       warp: async (s) => { await rpcCall("evm_increaseTime", [s + 5]); await rpcCall("evm_mine"); },
     });
     console.log("E2E OK", JSON.stringify({ address: out.address, steps: out.receipts.length }));

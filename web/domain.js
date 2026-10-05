@@ -65,3 +65,45 @@ export function passTypedData({ chainId, contract, bookingId, validUntil }) {
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+/** Contract custom errors → one sentence a shop owner or guest understands. */
+export const ERROR_TEXT = {
+  BadConfig: "Check the shop settings: deposit above 0, valid addresses, name up to 64 characters.",
+  ShopInactive: "This shop is not taking bookings right now.",
+  WrongDeposit: "The deposit amount does not match the shop's deposit.",
+  SlotTooSoon: "That time is inside the shop's free-cancel window or in the past. Pick a later time.",
+  NotAllowed: "This wallet is not allowed to do that for this booking.",
+  NotHeld: "This booking is already settled (refunded or claimed).",
+  TooLateToCancel: "The free-cancel window has closed for this booking.",
+  TooLate: "Check-in closed: the grace period after the slot has passed.",
+  TooEarly: "Too early: the shop can claim only after the slot plus the grace period.",
+  BadPass: "This check-in pass was not signed by the shop's current check-in key, or is for another booking.",
+  PassExpired: "This check-in pass expired. Ask the shop to show a fresh QR.",
+  NothingOwed: "Nothing to withdraw for this wallet.",
+  Reentered: "Another ShowUp action was still running in this transaction. Try again.",
+};
+
+export function friendlyError(e) {
+  const name = e?.data?.errorName || e?.cause?.data?.errorName || /reverted with the following reason:\s*\n?\s*(\w+)/.exec(e?.message || "")?.[1]
+    || Object.keys(ERROR_TEXT).find((k) => (e?.shortMessage || e?.message || "").includes(k));
+  if (name && ERROR_TEXT[name]) return ERROR_TEXT[name];
+  if (e?.code === 4001 || /User rejected|denied/i.test(e?.message || "")) return "You cancelled the request in your wallet.";
+  return e?.shortMessage || e?.message || String(e);
+}
+
+/** A link that opens the same page inside the MetaMask mobile in-app browser. */
+export function walletDeepLink(href) {
+  const u = new URL(href);
+  return `https://metamask.app.link/dapp/${u.host}${u.pathname}${u.search}${u.hash}`;
+}
+
+/** Slot time with the viewer's time zone spelled out, so nobody books the wrong hour. */
+export function formatSlot(sec, locale = undefined, timeZone = undefined) {
+  return new Date(Number(sec) * 1000).toLocaleString(locale, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short", timeZone });
+}
+
+/** Public reputation from on-chain counters: share of settled bookings the shop claimed as no-shows. */
+export function claimRate(refunded, claimed) {
+  const r = Number(refunded), c = Number(claimed);
+  return r + c === 0 ? null : Math.round((c / (r + c)) * 100);
+}

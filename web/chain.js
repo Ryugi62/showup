@@ -1,10 +1,10 @@
-// The only module that talks to the RPC or the wallet.
-import {
-  createPublicClient, createWalletClient, custom, http, defineChain, parseAbi,
-} from "https://esm.sh/viem@2.57.3";
+// The only module that talks to the RPC or the wallet. viem is vendored (web/vendor/viem.js) — no CDN code.
+import { createPublicClient, createWalletClient, custom, http, defineChain, decodeEventLog } from "./vendor/viem.js";
 import { CONFIG } from "./config.js";
+import { abi } from "./abi.js";
 import { passTypedData } from "./domain.js";
 
+export { abi };
 export const arc = defineChain({
   id: CONFIG.chainId,
   name: CONFIG.chainName,
@@ -13,78 +13,100 @@ export const arc = defineChain({
   blockExplorers: { default: { name: "Arcscan", url: CONFIG.explorer } },
 });
 
-export const abi = parseAbi([
-  "function shops(uint256) view returns (address owner, address payout, address signer, uint256 deposit, uint64 cancelWindow, uint64 grace, bool active, string name)",
-  "function bookings(uint256) view returns (uint256 shopId, address customer, uint64 slotStart, uint256 amount, uint8 status)",
-  "function shopCount() view returns (uint256)",
-  "function bookingCount() view returns (uint256)",
-  "function totalHeld() view returns (uint256)",
-  "function registerShop(address payout, address signer, uint256 deposit, uint64 cancelWindow, uint64 grace, string name) returns (uint256)",
-  "function book(uint256 shopId, uint64 slotStart) payable returns (uint256)",
-  "function cancel(uint256 bookingId)",
-  "function checkIn(uint256 bookingId, uint64 validUntil, bytes pass)",
-  "function release(uint256 bookingId)",
-  "function claim(uint256 bookingId)",
-]);
-
 export const pub = createPublicClient({ chain: arc, transport: http(CONFIG.rpc), pollingInterval: 250 });
 const address = () => CONFIG.contract;
 export const deployed = () => /^0x[0-9a-fA-F]{40}$/.test(CONFIG.contract);
 export const txUrl = (h) => `${CONFIG.explorer}/tx/${h}`;
 export const addrUrl = (a) => `${CONFIG.explorer}/address/${a}`;
+export const hasWallet = () => typeof window !== "undefined" && !!window.ethereum;
+const read = (functionName, args = []) => pub.readContract({ address: address(), abi, functionName, args });
+const ZERO = "0x0000000000000000000000000000000000000000";
 
 export async function readShop(id) {
-  const [owner, payout, signer, deposit, cancelWindow, grace, active, name] =
-    await pub.readContract({ address: address(), abi, functionName: "shops", args: [BigInt(id)] });
-  return { id: BigInt(id), owner, payout, signer, deposit, cancelWindow, grace, active, name };
+  const [owner, payout, signer, deposit, cancelWindow, grace, active, name] = await read("shops", [BigInt(id)]);
+  const [booked, refunded, claimed] = await read("shopStats", [BigInt(id)]);
+  return { id: BigInt(id), exists: owner !== ZERO, owner, payout, signer, deposit, cancelWindow, grace, active, name, booked, refunded, claimed };
 }
 
 export async function readBooking(id) {
-  const [shopId, customer, slotStart, amount, status] =
-    await pub.readContract({ address: address(), abi, functionName: "bookings", args: [BigInt(id)] });
-  return { id: BigInt(id), shopId, customer, slotStart, amount, status };
+  const [shopId, customer, slotStart, amount, status] = await read("bookings", [BigInt(id)]);
+  return { id: BigInt(id), shopId, customer, slotStart, amount, status: Number(status) };
 }
 
-export async function overview(limit = 40) {
-  const [shopCount, bookingCount, totalHeld] = await Promise.all(
-    ["shopCount", "bookingCount", "totalHeld"].map((f) => pub.readContract({ address: address(), abi, functionName: f })));
+/** Newest-first list of booking ids from the on-chain index (no log scanning). */
+async function latest(fn, key, limit) {
+  const total = fn === "bookingsOfShop" ? (await readShop(key)).booked : null;
+  let ids;
+  if (total !== null) {
+    const off = total > BigInt(limit) ? total - BigInt(limit) : 0n;
+    ids = await read(fn, [key, off, BigInt(limit)]);
+  } else {
+    // customer index: page through (customers rarely have many bookings)
+    ids = [];
+    for (let off = 0n; ; off += 50n) {
+      const page = await read(fn, [key, off, 50n]);
+      ids.push(...page);
+      if (page.length < 50) break;
+    }
+    ids = ids.slice(-limit);
+  }
+  return [...ids].reverse();
+}
+
+export async function bookingsOfShop(shopId, limit = 30) {
+  return Promise.all((await latest("bookingsOfShop", BigInt(shopId), limit)).map(readBooking));
+}
+export async function bookingsOfCustomer(customer, limit = 20) {
+  return Promise.all((await latest("bookingsOfCustomer", customer, limit)).map(readBooking));
+}
+
+export async function overview(limit = 20) {
+  const [shopCount, bookingCount, totalHeld] = await Promise.all(["shopCount", "bookingCount", "totalHeld"].map((f) => read(f)));
   const ids = [];
   for (let i = bookingCount; i >= 1n && ids.length < limit; i--) ids.push(i);
   const bookings = await Promise.all(ids.map(readBooking));
-  const shopIds = [...new Set(bookings.map((b) => b.shopId.toString()))];
-  const shops = Object.fromEntries(await Promise.all(shopIds.map(async (s) => [s, await readShop(s)])));
+  const shopIds = new Set(bookings.map((b) => b.shopId.toString()));
+  for (let i = 1n; i <= shopCount && shopIds.size < 12; i++) shopIds.add(i.toString());
+  const shops = Object.fromEntries(await Promise.all([...shopIds].map(async (s) => [s, await readShop(s)])));
   return { shopCount, bookingCount, totalHeld, bookings, shops };
 }
 
+/** Chain time — passes and windows are judged by block time, not the phone's clock. */
 export async function nowSec() {
-  const b = await pub.getBlock();
-  return b.timestamp;
+  return (await pub.getBlock()).timestamp;
 }
 
-let wallet;
+let wallet, account;
 export async function connect() {
-  if (!window.ethereum) throw new Error("No browser wallet found. Install MetaMask or Rabby, then reload.");
-  const [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
+  if (!hasWallet()) throw new Error("No browser wallet found. Open this page inside your wallet app (MetaMask, Rabby, Coinbase Wallet).");
+  [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
   const hex = "0x" + CONFIG.chainId.toString(16);
   try {
     await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
   } catch (e) {
-    if (e.code !== 4902) throw e;
+    const code = e?.code ?? e?.data?.originalError?.code;
+    if (code !== 4902 && code !== -32603) throw e;
     await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
       chainId: hex, chainName: CONFIG.chainName, rpcUrls: [CONFIG.rpc],
       nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 }, blockExplorerUrls: [CONFIG.explorer] }] });
   }
+  if (!connect.listening) {
+    connect.listening = true;
+    window.ethereum.on?.("accountsChanged", () => location.reload());
+    window.ethereum.on?.("chainChanged", () => location.reload());
+  }
   wallet = createWalletClient({ account, chain: arc, transport: custom(window.ethereum) });
   return account;
 }
+export const currentAccount = () => account;
 
 async function write(functionName, args, value) {
   if (!wallet) await connect();
-  const t0 = performance.now();
   const hash = await wallet.writeContract({ address: address(), abi, functionName, args, value });
-  const rc = await pub.waitForTransactionReceipt({ hash });
-  if (rc.status !== "success") throw new Error("Transaction reverted");
-  return { hash, ms: Math.round(performance.now() - t0), receipt: rc };
+  const t0 = performance.now(); // after the wallet prompt: measures network confirmation only
+  const receipt = await pub.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("Transaction reverted");
+  return { hash, ms: Math.round(performance.now() - t0), receipt };
 }
 
 export const book = (shopId, slotStart, value) => write("book", [BigInt(shopId), BigInt(slotStart)], value);
@@ -92,7 +114,17 @@ export const cancel = (id) => write("cancel", [BigInt(id)]);
 export const checkIn = (id, validUntil, sig) => write("checkIn", [BigInt(id), BigInt(validUntil), sig]);
 export const claim = (id) => write("claim", [BigInt(id)]);
 export const release = (id) => write("release", [BigInt(id)]);
-export const registerShop = (a) => write("registerShop", [a.payout, a.signer, a.deposit, BigInt(a.cancelWindow), BigInt(a.grace), a.name]);
+export const withdraw = () => write("withdraw", []);
+export async function registerShop(a) {
+  const r = await write("registerShop", [a.payout, a.signer, a.deposit, BigInt(a.cancelWindow), BigInt(a.grace), a.name]);
+  for (const log of r.receipt.logs) {
+    try {
+      const ev = decodeEventLog({ abi, data: log.data, topics: log.topics });
+      if (ev.eventName === "ShopRegistered") return { ...r, shopId: ev.args.shopId };
+    } catch {}
+  }
+  throw new Error("Registered, but the ShopRegistered event was not found in the receipt");
+}
 
 export async function signPass(bookingId, validUntil) {
   if (!wallet) await connect();

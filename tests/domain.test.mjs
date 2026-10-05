@@ -51,3 +51,22 @@ test("escapeHtml neutralises on-chain shop names", () => {
   assert.equal(escapeHtml(`<img src=x onerror="alert(1)">`), "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
   assert.equal(escapeHtml("Cafe 'Lumia' & Co"), "Cafe &#39;Lumia&#39; &amp; Co");
 });
+
+import { friendlyError, walletDeepLink, formatSlot, claimRate } from "../web/domain.js";
+test("friendlyError maps custom errors and wallet rejections", () => {
+  assert.match(friendlyError({ data: { errorName: "PassExpired" } }), /expired/);
+  assert.match(friendlyError({ shortMessage: 'The contract function "checkIn" reverted.\n\nError: TooLate()' }), /grace period/);
+  assert.match(friendlyError({ code: 4001, message: "User rejected the request." }), /cancelled/);
+  assert.equal(friendlyError({ message: "weird" }), "weird");
+});
+test("walletDeepLink keeps path, query and pass hash", () => {
+  assert.equal(walletDeepLink("https://ryugi62.github.io/showup/checkin.html#p=0xab.1.2.0xcd"),
+    "https://metamask.app.link/dapp/ryugi62.github.io/showup/checkin.html#p=0xab.1.2.0xcd");
+});
+test("formatSlot names the time zone", () => {
+  assert.match(formatSlot(1800000000, "en-US", "Asia/Seoul"), /GMT\+9|KST/);
+});
+test("claimRate", () => {
+  assert.equal(claimRate(0, 0), null);
+  assert.equal(claimRate(3, 1), 25);
+});
