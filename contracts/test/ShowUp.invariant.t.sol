@@ -14,6 +14,7 @@ contract Handler is Test {
     address[3] internal customers;
     uint256 public constant D = 1 ether;
 
+    Picky public picky;
     // ghost accounting
     uint256 public paidIn;
     uint256 public paidOut;
@@ -22,10 +23,13 @@ contract Handler is Test {
         su = _su;
         vm.prank(owner);
         shopId = su.registerShop(payout, vm.addr(signerPk), D, 1 hours, 15 minutes, "Inv Shop");
-        for (uint256 i; i < 3; i++) {
+        for (uint256 i; i < 2; i++) {
             customers[i] = makeAddr(string(abi.encode("c", i)));
             vm.deal(customers[i], 1_000 ether);
         }
+        picky = new Picky(); // a contract customer that refuses pushed refunds → exercises owed/withdraw
+        customers[2] = address(picky);
+        vm.deal(address(picky), 1_000 ether);
     }
 
     function book(uint256 who, uint32 ahead) external {
@@ -74,6 +78,15 @@ contract Handler is Test {
         try su.reclaim(id) { paidOut += D; } catch {}
     }
 
+    function pickyWithdraw() external {
+        uint256 o = su.owed(address(picky));
+        if (o == 0) return;
+        picky.pull(su);
+        withdrawn += o;
+    }
+
+    uint256 public withdrawn;
+
     function donate(uint96 amt) external {
         uint256 a = bound(amt, 1, 5 ether);
         vm.deal(address(su), address(su).balance + a);
@@ -93,6 +106,12 @@ contract Handler is Test {
     }
 }
 
+contract Picky {
+    bool internal pulling;
+    function pull(ShowUp su) external { pulling = true; su.withdraw(); pulling = false; }
+    receive() external payable { require(pulling, "push refused"); }
+}
+
 contract ShowUpInvariantTest is Test {
     ShowUp internal su;
     Handler internal h;
@@ -107,11 +126,13 @@ contract ShowUpInvariantTest is Test {
     /// Every held deposit and every parked payout is backed; forced transfers only add a surplus.
     function invariant_solvent() public view {
         assertEq(address(su).balance, su.totalHeld() + su.totalOwed() + h.donated());
+        assertEq(su.owed(address(h.picky())), su.totalOwed()); // only the picky customer can be owed
     }
 
     /// Money in = money still held + money paid out; nothing is created or lost.
     function invariant_conservation() public view {
-        assertEq(h.paidIn(), su.totalHeld() + h.paidOut() + su.totalOwed());
+        // paidOut counts settlements; parked amounts leave via withdraw
+        assertEq(h.paidIn(), su.totalHeld() + h.paidOut());
     }
 
     /// Every booking is in exactly one state, and the public shop counters agree with them.
@@ -125,9 +146,9 @@ contract ShowUpInvariantTest is Test {
             else if (st == ShowUp.Status.Claimed) claimed++;
             else revert("booking in None state");
         }
-        (uint64 b, uint64 r, uint64 c) = su.shopStats(h.shopId());
+        (uint64 b, uint64 ci, uint64 ca, uint64 re, uint64 rc, uint64 c,,) = su.shopStats(h.shopId());
         assertEq(b, n);
-        assertEq(r, refunded);
+        assertEq(uint256(ci) + ca + re + rc, refunded);
         assertEq(c, claimed);
         assertEq(su.totalHeld(), held * h.D());
     }

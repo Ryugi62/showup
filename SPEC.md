@@ -16,7 +16,7 @@ Arc is the reason this works: gas is paid in USDC (about one cent, priced in dol
 - **Owed**: a payout that could not be pushed, withdrawable by its recipient.
 
 ## Success criteria (numbers)
-1. Contract tests: 100% of the Given/When/Then cases below pass, plus fuzz tests (≥256 runs each) showing that the contract balance always equals the sum of `Held` deposits.
+1. Contract tests: 100% of the Given/When/Then cases below pass, plus invariants (256 runs × depth 100) showing balance = totalHeld + totalOwed (+ forced transfers) and shop counters = per-state counts.
 2. Deployed and verified working on Arc mainnet (chain 5042), with at least one real `Refunded` by check-in and one real `Claimed` booking, linked from the README.
 3. Gas per action measured on mainnet and reported in USDC: book, check-in refund, claim (target ≤ $0.02 each).
 4. The live page opens without a wallet and shows the shop and its bookings read from chain.
@@ -41,6 +41,10 @@ Arc is the reason this works: gas is paid in USDC (about one cent, priced in dol
 - G a pass signed for another ShowUp instance or another chain · W check in · T revert `BadPass`.
 - G shop signer is a contract wallet · W check in with a signature it accepts (EIP-1271) · T `Refunded`.
 - G refund recipient rejects the transfer · W any settlement · T booking still settles, amount parked in `owed`, `withdraw` pays it once.
+- G owner, payout or signer of the shop · W book · T revert `NotAllowed` (no self-booking).
+- G slot more than 365 days ahead · W book · T revert `SlotTooFar`.
+- G signer is an EIP-7702 delegated EOA (has code) · W check in with its key's signature · T `Refunded`.
+- G signer contract burns gas in `isValidSignature` · W check in · T revert `BadPass` within the 50k cap; booking still cancellable/refundable.
 - G any sequence of actions · T contract balance = totalHeld + totalOwed (+ forced transfers), and shopStats equals the per-state counts.
 
 ## Non-goals
@@ -50,4 +54,4 @@ Payments for the meal or service itself · fiat on-ramp · disputes beyond the r
 - `contracts/ShowUp.sol` — the whole domain on chain; no owner, no upgrade path.
 - `contracts/test/` — Foundry tests (unit + fuzz + invariant).
 - `web/` — static pages (GitHub Pages): `index.html` (read-only shop and booking view, no wallet), `book.html` (customer), `shop.html` (register, show check-in QR, claim). `web/domain.js` is pure (pass encoding, status labels, money formatting) and unit-tested with Node; `web/chain.js` is the only file that talks to the RPC/wallet.
-- `scripts/` — deploy and mainnet demo scripts (Foundry `cast`/`forge script`).
+- `scripts/` — viem scripts: `flow.mjs` (the end-to-end flow), `e2e-anvil.mjs`, `smoke-web.mjs` (pages in headless Chromium with an injected wallet), `deploy-mainnet.mjs` (deploy + real demo + README table).

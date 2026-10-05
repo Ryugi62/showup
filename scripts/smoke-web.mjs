@@ -68,6 +68,11 @@ try {
   await shopPage.click("#reg");
   steps.push(68); await shopPage.waitForFunction(() => /Shop #\d+ registered/.test(document.getElementById("msg").textContent), null, { timeout: 20000 });
   const newShop = await shopPage.inputValue("#shop");
+  // move pass signing to a separate key on this device (owner key stays off the counter)
+  await shopPage.waitForSelector("#mkdev", { state: "visible", timeout: 20000 });
+  await shopPage.click("#mkdev");
+  await shopPage.waitForFunction(() => document.getElementById("msg").textContent.includes("This device now signs"), null, { timeout: 20000 });
+  await shopPage.waitForFunction(() => document.getElementById("signerInfo").textContent.includes("(this device)"), null, { timeout: 20000 });
   const guestPage = await ctxGuest.newPage(); pages.guest = guestPage;
   const chainNow = async () => Number(BigInt((await call("eth_getBlockByNumber", ["latest", false])).timestamp));
   const setSlot = async (sec) => guestPage.evaluate((t) => { const d = new Date(t * 1000); document.getElementById("slot").value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }, sec);
@@ -97,6 +102,15 @@ try {
   await guestPage.waitForFunction(() => document.getElementById("msg").textContent.includes("Booked"), null, { timeout: 20000 });
   await shopPage.goto(`http://127.0.0.1:${WEB}/shop.html?shop=${newShop}`); await shopPage.waitForSelector("[data-pass]", { timeout: 20000 });
   await shopPage.click("[data-pass]"); await shopPage.waitForSelector("#qr svg");
+  // a guest whose phone opens the QR in a plain browser gets the wallet-app path, on a phone-sized screen
+  const heldLink = await shopPage.evaluate(() => document.querySelector("#qrnote a")?.href);
+  const phone = await (await browser.newContext({ viewport: { width: 375, height: 760 }, deviceScaleFactor: 2 })).newPage();
+  phone.on("pageerror", (e) => errors.push("phone: " + e.message));
+  await phone.goto(heldLink);
+  await phone.waitForSelector("#nowallet:not([hidden])", { timeout: 20000 });
+  if (!(await phone.textContent("#nowallet")).includes("Open in MetaMask")) throw new Error("wallet-less banner missing");
+  if (!(await phone.isDisabled("#go"))) throw new Error("check-in button should stay disabled without a wallet");
+  await phone.screenshot({ path: new URL("../docs/smoke-phone-nowallet.png", import.meta.url).pathname });
   await shopPage.click("#tablet");
   await shopPage.waitForFunction(() => document.getElementById("msg").textContent.includes("Checked in"), null, { timeout: 20000 });
   // second booking → no-show → owner claims after grace
@@ -109,7 +123,7 @@ try {
   steps.push(95); await shopPage.reload(); await shopPage.waitForSelector("[data-claim]", { timeout: 20000 });
   await shopPage.click("[data-claim]");
   steps.push(97); await shopPage.waitForFunction(() => document.getElementById("msg").textContent.includes("Claimed"), null, { timeout: 20000 });
-  steps.push(98); await shopPage.reload(); await shopPage.waitForFunction(() => document.getElementById("head").textContent.includes("2 refunded · 1 claimed"), null, { timeout: 20000 });
+  steps.push(98); await shopPage.reload(); await shopPage.waitForFunction(() => document.getElementById("head").textContent.includes("2 checked in") && document.getElementById("head").textContent.includes("1 no-shows claimed"), null, { timeout: 20000 });
   await shopPage.screenshot({ path: new URL("../docs/smoke-shop.png", import.meta.url).pathname, fullPage: true });
   // a plain browser (no wallet) on the check-in link gets the "open in wallet app" path, not a dead button
   const plain = await (await browser.newContext()).newPage();

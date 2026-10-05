@@ -12,47 +12,67 @@
   <div class="row"><b id="qrtitle">Check-in pass</b><button class="ghost" id="qrclose">Close</button></div>
   <div id="qr"></div>
   <p class="muted" id="qrnote"></p>
-  <p><button class="ghost" id="qrrefresh">New pass</button> <button class="ghost" id="tablet">Guest has no wallet? Check in from this device</button></p>
+  <p><button class="ghost" id="qrrefresh">New pass</button> <button class="ghost" id="tablet">Guest's phone can't open a wallet? Submit from this device</button></p>
 </div>
+<div id="nowallet" class="card" hidden></div>
 <div id="head"></div>
 <div id="list" class="muted">Loading…</div>
+<div id="settings" hidden>
+<h2>Shop settings</h2>
+<div class="card">
+  <div class="row"><div><b>Check-in key</b><div class="muted" id="signerInfo"></div></div><button class="ghost" id="mkdev">Use a key on this device</button></div>
+  <p class="muted">Keep the owner wallet off the counter: a separate check-in key on the shop's tablet signs passes without a wallet prompt, and it can't claim or refund anything.</p>
+</div>
+<div class="card">
+  <label for="payout">Payout address</label><input id="payout" class="mono">
+  <p><button class="ghost" id="savePayout">Save payout</button> <button class="ghost" id="toggleActive"></button></p>
+  <label for="newOwner">Transfer shop to</label><input id="newOwner" class="mono" placeholder="0x…">
+  <p><button class="ghost" id="transfer">Transfer ownership</button></p>
+</div>
+</div>
 <h2>Register a new shop</h2>
 <div class="card">
 <label for="name">Name</label><input id="name" maxlength="64" placeholder="Cafe Lumia">
 <label for="dep">Deposit (USDC)</label><input id="dep" value="5" inputmode="decimal">
 <label for="cw">Free cancel until (minutes before the slot, 0–43200)</label><input id="cw" type="number" min="0" max="43200" value="120">
 <label for="gr">Grace after slot start (minutes, 5–1440)</label><input id="gr" type="number" min="5" max="1440" value="15">
-<p class="muted">Deposit, cancel window and grace are fixed once registered, so they never change under an existing booking. Payout address and check-in key start as the connected wallet; both can be changed later.</p>
+<p class="muted">Deposit, cancel window and grace are fixed once registered, so they never change under an existing booking. Payout address and check-in key start as the connected wallet; change them under Shop settings. Claim no-shows within 30 days of the slot — after that the guest can take the deposit back.</p>
 <p><button id="reg">Register shop</button></p>
 </div>
 </main>
 <script type="module">
-import { readShop, connect, signPass, claim, release, checkIn, txUrl, nowSec, registerShop, bookingsOfShop, currentAccount, hasWallet } from "./chain.js";
+import { readShop, connect, signPass, claim, release, checkIn, txUrl, addrUrl, nowSec, registerShop, bookingsOfShop, currentAccount, hasWallet, deviceKey, createDeviceKey, setSigner, setPayout, setActive, transferShop } from "./chain.js";
 import { CONFIG } from "./config.js";
-import { formatUsdc, actionsFor, STATUS, escapeHtml, encodePass, parseUsdc, formatSlot, claimRate } from "./domain.js";
-import { $, msg, fail } from "./ui.js";
+import { formatUsdc, actionsFor, STATUS, escapeHtml, encodePass, parseUsdc, formatSlot, claimRate, secondsLeft } from "./domain.js";
+import { $, msg, fail, walletBanner } from "./ui.js";
 const q = new URLSearchParams(location.search); $("shop").value = q.get("shop") || CONFIG.demoShopId || 1;
-let shop, pass, timer;
+let shop, pass, timer, seq = 0;
 const isOwner = () => shop && currentAccount() && shop.owner.toLowerCase() === currentAccount().toLowerCase();
 
 async function render() {
   history.replaceState(null, "", `?shop=${encodeURIComponent($("shop").value)}`);
+  const mySeq = ++seq;
   const s = await readShop($("shop").value);
+  if (mySeq !== seq) return; // a newer shop number was typed meanwhile
   shop = s.exists ? s : null;
   if (!shop) { $("head").innerHTML = ""; $("list").textContent = "No shop with that number. Register one below."; return; }
   const link = new URL(`book.html?shop=${s.id}`, location.href).href;
-  const rate = claimRate(s.refunded, s.claimed);
-  $("head").innerHTML = `<h2>${escapeHtml(s.name)} · deposit ${formatUsdc(s.deposit)} USDC</h2>
-    <p class="muted">${s.booked} booked · ${s.refunded} refunded · ${s.claimed} claimed${rate === null ? "" : ` · claim rate ${rate}% (public)`}</p>
+  const rate = claimRate(s.checkedIn, s.claimed);
+  $("head").innerHTML = `<h2>${escapeHtml(s.name)} · deposit ${formatUsdc(s.deposit)} USDC${s.active ? "" : " · paused"}</h2>
+    <p class="muted">Owner <a class="mono" href="${addrUrl(s.owner)}">${s.owner.slice(0, 10)}…</a> · ${s.booked} booked by ${s.uniqueCustomers} guests · ${s.checkedIn} checked in · ${s.cancelled} cancelled · ${s.released} refunded by you · ${s.claimed} no-shows claimed${rate === null ? "" : ` · claim rate ${rate}% (public)`}</p>
     <div class="card row"><div class="mono">${link}</div><div><button class="ghost" id="copy">Copy booking link</button></div></div>
-    ${isOwner() ? "" : `<p><button id="conn">${hasWallet() ? "Connect the shop wallet to manage bookings" : "Open in your wallet app to manage bookings"}</button></p>`}`;
+    ${isOwner() || !hasWallet() ? "" : `<p><button id="conn">Connect the shop wallet to manage bookings</button></p>`}`;
+  if (!hasWallet()) walletBanner($("nowallet"));
   $("copy").onclick = async () => { try { await navigator.clipboard.writeText(link); $("copy").textContent = "Copied"; } catch { prompt("Booking link", link); } };
   $("conn")?.addEventListener("click", async () => { try { await connect(); if (!isOwner()) msg("This wallet does not own this shop.", "err"); render(); } catch (e) { fail(e); } });
+  renderSettings();
   const [list, now] = await Promise.all([bookingsOfShop(s.id), nowSec()]);
+  if (mySeq !== seq) return;
   $("list").innerHTML = list.map((b) => {
     const a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
     const btns = !isOwner() ? "" : `${a.checkIn ? `<button data-pass="${b.id}">Check-in QR</button>` : ""} ${a.claim ? `<button class="ghost" data-claim="${b.id}">Claim no-show</button>` : ""} ${a.release ? `<button class="ghost" data-rel="${b.id}">Refund (forgive)</button>` : ""}`;
-    return `<div class="card row"><div><b>#${b.id}</b> · ${formatSlot(b.slotStart)}<div class="muted">${formatUsdc(b.amount)} USDC · <span class="mono">${b.customer.slice(0, 10)}…</span>${STATUS[b.status] === "Held" ? " · " + a.phase : ""}</div></div><div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}</span> ${btns}</div></div>`;
+    const due = STATUS[b.status] === "Held" && a.claim ? ` · claim by ${formatSlot(a.claimBy)}` : "";
+    return `<div class="card row"><div><b>#${b.id}</b> · ${formatSlot(b.slotStart)}<div class="muted">${formatUsdc(b.amount)} USDC · <span class="mono">${b.customer.slice(0, 10)}…</span>${STATUS[b.status] === "Held" ? " · " + a.phase : ""}${due}</div></div><div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}</span> ${btns}</div></div>`;
   }).join("") || `No bookings yet. Share your booking link.`;
   document.querySelectorAll("[data-pass]").forEach((b) => b.onclick = () => showPass(b.dataset.pass).catch(fail));
   document.querySelectorAll("[data-claim]").forEach((b) => b.onclick = () => confirm(`Claim the deposit of booking #${b.dataset.claim} as a no-show? This can't be undone.`) && act(claim, b.dataset.claim, "Claimed"));
@@ -62,13 +82,37 @@ async function act(fn, id, word) {
   try { msg("Confirm in your wallet…"); const r = await fn(id); msg(`${word}. Confirmed in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); await render(); }
   catch (e) { fail(e); }
 }
+function renderSettings() {
+  $("settings").hidden = !isOwner();
+  if (!isOwner()) return;
+  const dev = deviceKey(shop.id);
+  const usingDev = dev && dev.address.toLowerCase() === shop.signer.toLowerCase();
+  $("signerInfo").innerHTML = `Current: <span class="mono">${shop.signer.slice(0, 10)}…</span> ${usingDev ? "(this device)" : shop.signer.toLowerCase() === shop.owner.toLowerCase() ? "(the owner wallet)" : ""}`;
+  $("mkdev").hidden = !!usingDev;
+  $("payout").value = shop.payout;
+  $("toggleActive").textContent = shop.active ? "Pause new bookings" : "Resume bookings";
+}
+$("mkdev").onclick = async () => {
+  try { const dev = deviceKey(shop.id) || createDeviceKey(shop.id); msg("Confirm the key change in your wallet…");
+    const r = await setSigner(shop.id, dev.address); msg(`This device now signs check-in passes · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); await render(); } catch (e) { fail(e); }
+};
+$("savePayout").onclick = async () => { try { const r = await setPayout(shop.id, $("payout").value.trim()); msg(`Payout updated · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); await render(); } catch (e) { fail(e); } };
+$("toggleActive").onclick = async () => { try { const r = await setActive(shop.id, !shop.active); msg(`${shop.active ? "Paused" : "Resumed"} · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); await render(); } catch (e) { fail(e); } };
+$("transfer").onclick = async () => {
+  const to = $("newOwner").value.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to)) { msg("Enter a full 0x… address.", "err"); return; }
+  if (!confirm(`Transfer shop #${shop.id} to ${to}? Only the new owner can manage it afterwards.`)) return;
+  try { const r = await transferShop(shop.id, to); msg(`Transferred · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); await render(); } catch (e) { fail(e); }
+};
 async function showPass(id) {
-  if (shop.signer.toLowerCase() !== currentAccount().toLowerCase()) { msg("This wallet is not the shop's current check-in key, so its passes would be rejected.", "err"); return; }
+  const dev = deviceKey(shop.id);
+  const canSign = (dev && dev.address.toLowerCase() === shop.signer.toLowerCase()) || shop.signer.toLowerCase() === (currentAccount() || "").toLowerCase();
+  if (!canSign) { msg("Neither this device nor this wallet is the shop's current check-in key, so a pass would be rejected.", "err"); return; }
   const chainNow = Number(await nowSec());
   const skew = chainNow - Math.floor(Date.now() / 1000); // count down in chain time, not the device clock
-  const validUntil = chainNow + 120; // short-lived: a forwarded photo of the QR goes stale fast
-  msg("Sign the check-in pass in your wallet (free, no transaction)…");
-  const sig = await signPass(id, validUntil);
+  const validUntil = chainNow + 180; // short-lived: a forwarded photo of the QR goes stale fast
+  msg("Signing the check-in pass (free, no transaction)…");
+  const { sig } = await signPass(id, validUntil, shop);
   pass = { id, validUntil, sig };
   const link = encodePass({ contract: CONFIG.contract, bookingId: id, validUntil, sig }, new URL("checkin.html", location.href).href);
   const qr = qrcode(0, "M"); qr.addData(link); qr.make();
@@ -76,10 +120,13 @@ async function showPass(id) {
   $("qrtitle").textContent = `Check-in pass · booking #${id}`;
   $("qrbox").hidden = false; msg("");
   clearInterval(timer);
-  timer = setInterval(() => {
-    const left = validUntil - (Math.floor(Date.now() / 1000) + skew);
+  const tick = () => {
+    const left = secondsLeft(validUntil, Math.floor(Date.now() / 1000), skew);
     $("qrnote").innerHTML = left > 0 ? `The guest scans this with their phone. Valid for ${left}s, only for booking #${id}. <a href="${link}">Open link</a>` : "Expired — tap New pass.";
-  }, 1000);
+    if (left <= 0) clearInterval(timer);
+  };
+  tick();
+  timer = setInterval(tick, 1000);
 }
 $("qrclose").onclick = () => { $("qrbox").hidden = true; clearInterval(timer); };
 $("qrrefresh").onclick = () => pass && showPass(pass.id).catch(fail);
@@ -90,6 +137,7 @@ $("tablet").onclick = async () => {
   catch (e) { fail(e); }
 };
 $("shop").oninput = () => render().catch(fail);
+$("shop").onchange = () => render().catch(fail);
 $("reg").onclick = async () => {
   try {
     const cw = Number($("cw").value), gr = Number($("gr").value);

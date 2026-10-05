@@ -37,16 +37,21 @@ export function decodePass(hash) {
  * What can happen to a booking right now, from the chain state alone.
  * Mirrors the contract's rules so the UI never offers a button that will revert.
  */
+export const RECLAIM_AFTER = 30 * 24 * 3600;
+
 export function actionsFor({ status, slotStart, cancelWindow, grace }, nowSec) {
   const s = Number(status), start = Number(slotStart), now = Number(nowSec);
-  if (STATUS[s] !== "Held") return { cancel: false, checkIn: false, claim: false, release: false, phase: STATUS[s] || "None" };
-  const cancelUntil = start - Number(cancelWindow);
   const claimFrom = start + Number(grace);
+  const reclaimFrom = claimFrom + RECLAIM_AFTER; // the shop must claim before this, or the guest can take it back
+  if (STATUS[s] !== "Held") return { cancel: false, checkIn: false, claim: false, release: false, reclaim: false, phase: STATUS[s] || "None", claimBy: reclaimFrom };
+  const cancelUntil = start - Number(cancelWindow);
   return {
     cancel: now < cancelUntil,
     checkIn: now < claimFrom,
     claim: now >= claimFrom,
     release: true,
+    reclaim: now >= reclaimFrom,
+    claimBy: reclaimFrom,
     phase: now < cancelUntil ? "free-cancel" : now < claimFrom ? "check-in" : "no-show",
   };
 }
@@ -72,7 +77,8 @@ export const ERROR_TEXT = {
   ShopInactive: "This shop is not taking bookings right now.",
   WrongDeposit: "The deposit amount does not match the shop's deposit.",
   SlotTooSoon: "That time is inside the shop's free-cancel window or in the past. Pick a later time.",
-  NotAllowed: "This wallet is not allowed to do that for this booking.",
+  SlotTooFar: "Bookings can be at most a year ahead.",
+  NotAllowed: "This wallet is not allowed to do that (a shop can't book itself; only the guest or the shop owner can act on a booking).",
   NotHeld: "This booking is already settled (refunded or claimed).",
   TooLateToCancel: "The free-cancel window has closed for this booking.",
   TooLate: "Check-in closed: the grace period after the slot has passed.",
@@ -102,8 +108,14 @@ export function formatSlot(sec, locale = undefined, timeZone = undefined) {
   return new Date(Number(sec) * 1000).toLocaleString(locale, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short", timeZone });
 }
 
-/** Public reputation from on-chain counters: share of settled bookings the shop claimed as no-shows. */
-export function claimRate(refunded, claimed) {
-  const r = Number(refunded), c = Number(claimed);
+/** Public reputation from on-chain counters: of guests who reached the slot, the share the shop claimed as
+ *  no-shows. Cancellations and shop refunds are excluded so they can't dilute it. A soft signal, not proof. */
+export function claimRate(checkedIn, claimed) {
+  const r = Number(checkedIn), c = Number(claimed);
   return r + c === 0 ? null : Math.round((c / (r + c)) * 100);
+}
+
+/** Countdown helper that uses chain time: skew = chainNow − deviceNow at the moment we read the chain. */
+export function secondsLeft(validUntil, deviceNowSec, skew) {
+  return Number(validUntil) - (Number(deviceNowSec) + Number(skew));
 }

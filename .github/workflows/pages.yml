@@ -16,10 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
-      - run: forge test
+      - run: forge test --summary
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
+      - run: npm ci --ignore-scripts
       - run: node --test tests/*.test.mjs
+      - run: npm run -s vendor:check
   deploy:
     needs: test
     runs-on: ubuntu-latest

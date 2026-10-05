@@ -30,7 +30,8 @@ test("pass link encodes and decodes", () => {
 
 test("actionsFor mirrors contract windows", () => {
   const b = { status: 1, slotStart: 10_000, cancelWindow: 3600, grace: 900 };
-  assert.deepEqual(actionsFor(b, 6_399), { cancel: true, checkIn: true, claim: false, release: true, phase: "free-cancel" });
+  assert.deepEqual(actionsFor(b, 6_399), { cancel: true, checkIn: true, claim: false, release: true, reclaim: false, claimBy: 10_900 + 30 * 24 * 3600, phase: "free-cancel" });
+  assert.equal(actionsFor(b, 10_900 + 30 * 24 * 3600).reclaim, true);
   assert.equal(actionsFor(b, 6_400).cancel, false);
   assert.equal(actionsFor(b, 10_899).checkIn, true);
   assert.equal(actionsFor(b, 10_900).checkIn, false);
@@ -69,4 +70,10 @@ test("formatSlot names the time zone", () => {
 test("claimRate", () => {
   assert.equal(claimRate(0, 0), null);
   assert.equal(claimRate(3, 1), 25);
+});
+
+import { secondsLeft } from "../web/domain.js";
+test("secondsLeft counts in chain time", () => {
+  assert.equal(secondsLeft(1000, 900, 0), 100);
+  assert.equal(secondsLeft(1000, 900, 50), 50); // chain is 50 s ahead of the device
 });

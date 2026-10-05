@@ -1,5 +1,5 @@
 // The only module that talks to the RPC or the wallet. viem is vendored (web/vendor/viem.js) — no CDN code.
-import { createPublicClient, createWalletClient, custom, http, defineChain, decodeEventLog } from "./vendor/viem.js";
+import { createPublicClient, createWalletClient, custom, http, defineChain, decodeEventLog, privateKeyToAccount, generatePrivateKey } from "./vendor/viem.js";
 import { CONFIG } from "./config.js";
 import { abi } from "./abi.js";
 import { passTypedData } from "./domain.js";
@@ -24,8 +24,9 @@ const ZERO = "0x0000000000000000000000000000000000000000";
 
 export async function readShop(id) {
   const [owner, payout, signer, deposit, cancelWindow, grace, active, name] = await read("shops", [BigInt(id)]);
-  const [booked, refunded, claimed] = await read("shopStats", [BigInt(id)]);
-  return { id: BigInt(id), exists: owner !== ZERO, owner, payout, signer, deposit, cancelWindow, grace, active, name, booked, refunded, claimed };
+  const [booked, checkedIn, cancelled, released, reclaimed, claimed, uniqueCustomers, since] = await read("shopStats", [BigInt(id)]);
+  return { id: BigInt(id), exists: owner !== ZERO, owner, payout, signer, deposit, cancelWindow, grace, active, name,
+    booked, checkedIn, cancelled, released, reclaimed, claimed, uniqueCustomers, since };
 }
 
 export async function readBooking(id) {
@@ -66,7 +67,7 @@ export async function overview(limit = 20) {
   for (let i = bookingCount; i >= 1n && ids.length < limit; i--) ids.push(i);
   const bookings = await Promise.all(ids.map(readBooking));
   const shopIds = new Set(bookings.map((b) => b.shopId.toString()));
-  for (let i = 1n; i <= shopCount && shopIds.size < 12; i++) shopIds.add(i.toString());
+  for (let i = shopCount; i >= 1n && shopIds.size < 12; i--) shopIds.add(i.toString()); // newest shops first
   const shops = Object.fromEntries(await Promise.all([...shopIds].map(async (s) => [s, await readShop(s)])));
   return { shopCount, bookingCount, totalHeld, bookings, shops };
 }
@@ -102,7 +103,9 @@ export const currentAccount = () => account;
 
 async function write(functionName, args, value) {
   if (!wallet) await connect();
-  const hash = await wallet.writeContract({ address: address(), abi, functionName, args, value });
+  // Simulate first: a revert surfaces as a decoded custom error (friendly text) before any wallet prompt.
+  const { request } = await pub.simulateContract({ address: address(), abi, functionName, args, value, account });
+  const hash = await wallet.writeContract(request);
   const t0 = performance.now(); // after the wallet prompt: measures network confirmation only
   const receipt = await pub.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("Transaction reverted");
@@ -115,6 +118,11 @@ export const checkIn = (id, validUntil, sig) => write("checkIn", [BigInt(id), Bi
 export const claim = (id) => write("claim", [BigInt(id)]);
 export const release = (id) => write("release", [BigInt(id)]);
 export const withdraw = () => write("withdraw", []);
+export const reclaim = (id) => write("reclaim", [BigInt(id)]);
+export const setSigner = (shopId, a) => write("setSigner", [BigInt(shopId), a]);
+export const setPayout = (shopId, a) => write("setPayout", [BigInt(shopId), a]);
+export const setActive = (shopId, on) => write("setActive", [BigInt(shopId), !!on]);
+export const transferShop = (shopId, a) => write("transferShop", [BigInt(shopId), a]);
 export async function registerShop(a) {
   const r = await write("registerShop", [a.payout, a.signer, a.deposit, BigInt(a.cancelWindow), BigInt(a.grace), a.name]);
   for (const log of r.receipt.logs) {
@@ -126,7 +134,22 @@ export async function registerShop(a) {
   throw new Error("Registered, but the ShopRegistered event was not found in the receipt");
 }
 
-export async function signPass(bookingId, validUntil) {
+// ---- device check-in key: a separate key kept on the shop's tablet, so the owner key can live elsewhere ----
+const keyName = (shopId) => `showup.checkin.${CONFIG.chainId}.${address().toLowerCase()}.${shopId}`;
+export function deviceKey(shopId) {
+  try { const pk = localStorage.getItem(keyName(shopId)); return pk ? privateKeyToAccount(pk) : null; } catch { return null; }
+}
+export function createDeviceKey(shopId) {
+  const pk = generatePrivateKey();
+  localStorage.setItem(keyName(shopId), pk);
+  return privateKeyToAccount(pk);
+}
+
+/** Sign with the device key if it is the shop's current signer; otherwise with the connected wallet. */
+export async function signPass(bookingId, validUntil, shop) {
+  const td = passTypedData({ chainId: CONFIG.chainId, contract: address(), bookingId, validUntil });
+  const dev = shop ? deviceKey(shop.id) : null;
+  if (dev && shop.signer.toLowerCase() === dev.address.toLowerCase()) return { sig: await dev.signTypedData(td), by: "device" };
   if (!wallet) await connect();
-  return wallet.signTypedData(passTypedData({ chainId: CONFIG.chainId, contract: address(), bookingId, validUntil }));
+  return { sig: await wallet.signTypedData(td), by: "wallet" };
 }

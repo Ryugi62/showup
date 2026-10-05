@@ -357,19 +357,44 @@ contract ShowUpTest is Test {
         assertEq(newPayout.balance, D);
     }
 
-    function test_stats_countRefundsAndClaims() public {
+    function test_stats_countEachOutcomeSeparately() public {
         uint256 a = _book(alice);
         uint256 b = _book(bob);
+        uint256 c = _book(alice);
+        uint256 d = _book(bob);
         uint64 vu = uint64(block.timestamp + 1 hours);
-        bytes memory pass = _pass(signerPk, a, vu);
-        su.checkIn(a, vu, pass);
+        su.checkIn(a, vu, _pass(signerPk, a, vu));
+        vm.prank(alice);
+        su.cancel(c);
+        vm.prank(owner);
+        su.release(d);
         vm.warp(slot + GRACE);
         vm.prank(owner);
         su.claim(b);
-        (uint64 booked, uint64 refunded, uint64 claimed) = su.shopStats(shopId);
-        assertEq(booked, 2);
-        assertEq(refunded, 1);
+        (uint64 booked, uint64 checkedIn, uint64 cancelled, uint64 released, uint64 reclaimed, uint64 claimed, uint64 uniq, uint64 since) =
+            su.shopStats(shopId);
+        assertEq(since, 1_800_000_000);
+        assertEq(booked, 4);
+        assertEq(checkedIn, 1);
+        assertEq(cancelled, 1);
+        assertEq(released, 1);
+        assertEq(reclaimed, 0);
         assertEq(claimed, 1);
+        assertEq(uniq, 2);
+    }
+
+    function test_eip1271_gasBurningSigner_isRejectedNotStuck() public {
+        GasBurner g = new GasBurner();
+        vm.prank(owner);
+        su.setSigner(shopId, address(g));
+        uint256 id = _book(alice);
+        uint64 vu = uint64(block.timestamp + 1 hours);
+        bytes memory pass = _pass(signerPk, id, vu);
+        vm.expectRevert(ShowUp.BadPass.selector);
+        su.checkIn{gas: 1_000_000}(id, vu, pass);
+        // the shop can still refund, the guest can still cancel in time
+        vm.prank(alice);
+        su.cancel(id);
     }
 
     function test_indexes_listBookingsByShopAndCustomer() public {
@@ -457,6 +482,57 @@ contract ShowUpTest is Test {
         r.doWithdraw();
     }
 
+    function test_book_tooFarAhead_reverts() public {
+        vm.prank(alice);
+        vm.expectRevert(ShowUp.SlotTooFar.selector);
+        su.book{value: D}(shopId, uint64(block.timestamp + 365 days + 1));
+    }
+
+    function test_book_byShopOwnPayoutOrSigner_reverts() public {
+        vm.deal(owner, 10 ether);
+        vm.deal(payout, 10 ether);
+        vm.deal(signer, 10 ether);
+        address[3] memory selves = [owner, address(payout), signer];
+        for (uint256 i; i < 3; i++) {
+            vm.prank(selves[i]);
+            vm.expectRevert(ShowUp.NotAllowed.selector);
+            su.book{value: D}(shopId, slot);
+        }
+    }
+
+    function test_eip7702StyleSigner_withCode_stillAcceptsItsOwnSignature() public {
+        vm.etch(signer, hex"ef0100aabbccddeeff00112233445566778899aabbccdd"); // delegated EOA: has code, real key
+        uint256 id = _book(alice);
+        uint64 vu = uint64(block.timestamp + 1 hours);
+        su.checkIn(id, vu, _pass(signerPk, id, vu));
+        assertEq(alice.balance, 100 ether);
+    }
+
+    function test_gasHungryReceiver_isCappedAndParked() public {
+        Hog hog = new Hog(su);
+        vm.deal(address(hog), 10 ether);
+        uint256 id = hog.doBook(shopId, slot, D);
+        vm.prank(owner);
+        uint256 g0 = gasleft();
+        su.release(id);
+        uint256 used = g0 - gasleft();
+        assertLt(used, 300_000); // the shop never pays for the receiver's loop beyond the cap
+        assertEq(su.owed(address(hog)), D);
+    }
+
+    function test_reentrancy_intoAnotherHeldBooking_isBlocked() public {
+        Reenter m = new Reenter(su);
+        vm.deal(address(m), 10 ether);
+        uint256 first = m.doBook(shopId, slot, D);
+        uint256 second = m.doBook(shopId, slot, D);
+        m.arm(second); // on receiving the refund for `first`, try to cancel `second` mid-call
+        vm.prank(owner);
+        su.release(first);
+        assertEq(uint8(su.statusOf(second)), uint8(ShowUp.Status.Held)); // re-entry did not go through
+        assertTrue(m.sawReentered()); // the nested call hit the guard
+        assertEq(address(m).balance, 10 ether - D); // first refunded once, second still held
+    }
+
     function test_reentrancy_onRefund_isContained() public {
         Reenter m = new Reenter(su);
         vm.deal(address(m), 10 ether);
@@ -485,6 +561,14 @@ contract Mock1271 {
     }
 }
 
+contract GasBurner {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes4) {
+        uint256 x;
+        while (true) { unchecked { x++; } }
+        return bytes4(uint32(x));
+    }
+}
+
 contract Refuser {
     ShowUp internal su;
     bool internal accept;
@@ -498,10 +582,24 @@ contract Refuser {
 contract Reenter {
     ShowUp internal su;
     uint256 internal target;
+    bool public sawReentered;
     constructor(ShowUp s) { su = s; }
     function arm(uint256 id) external { target = id; }
     function doBook(uint256 shop, uint64 slot, uint256 d) external returns (uint256) { return su.book{value: d}(shop, slot); }
     receive() external payable {
-        if (target != 0) { uint256 t = target; target = 0; su.cancel(t); }
+        if (target != 0) {
+            uint256 t = target;
+            target = 0;
+            try su.cancel(t) {} catch (bytes memory err) {
+                if (bytes4(err) == ShowUp.Reentered.selector) sawReentered = true;
+            }
+        }
     }
+}
+
+contract Hog {
+    ShowUp internal su;
+    constructor(ShowUp s) { su = s; }
+    function doBook(uint256 shop, uint64 slot, uint256 d) external returns (uint256) { return su.book{value: d}(shop, slot); }
+    receive() external payable { uint256 x; while (true) { unchecked { x++; } } }
 }

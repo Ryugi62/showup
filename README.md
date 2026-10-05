@@ -1,5 +1,7 @@
 # ShowUp — refundable booking deposits on Arc
 
+[![tests](https://github.com/Ryugi62/showup/actions/workflows/pages.yml/badge.svg)](https://github.com/Ryugi62/showup/actions/workflows/pages.yml) — CI runs the Foundry suite, the Node tests and a reproducible-vendor check on every push, then deploys the pages.
+
 **A small USDC deposit that a guest gets back the moment they check in, and that a shop can claim only after a no-show.** It sits next to whatever booking system a shop already uses. Built for [Arc](https://arc.io) mainnet, where gas is paid in USDC and finality is sub-second.
 
 **Try it (no wallet needed to look):** https://ryugi62.github.io/showup/ · **Code:** this repo · **Builder:** [github.com/Ryugi62](https://github.com/Ryugi62)
@@ -17,12 +19,13 @@ Restaurants, clinics and salons hold slots for people who don't come. A deposit 
 guest                                ShowUp contract (Arc)                          shop
 book(shop, slot) + 5 USDC ──────►    Held ── free cancel until slot − cutoff ──►  (guest refunded)
                                        │
-arrives, scans the shop's QR           │  EIP-712 pass (bookingId, validUntil), valid 2 min
+arrives, scans the shop's QR           │  EIP-712 pass (bookingId, validUntil), valid 3 min
 checkIn(id, validUntil, sig) ───►      Refunded → 5 USDC back to the guest in the same tx
   (or the shop's tablet submits it — the guest needs no gas)
                                        │
-never comes                            │  only after slot + grace (≥ 5 min)
+never comes                            │  only after slot + grace (≥ 5 min), and within 30 days
                                        └► Claimed → 5 USDC to the shop's payout ◄──── claim(id)
+                                          (not claimed by then → the guest can reclaim it)
 ```
 
 ## Why Arc
@@ -33,12 +36,13 @@ never comes                            │  only after slot + grace (≥ 5 min)
 
 ## Trust model and guarantees
 - **No admin key, no upgrade path.** The deployer cannot move a deposit.
-- **The shop attests attendance** by signing the guest's pass. A shop could withhold the pass and claim anyway. So each shop's record is public and kept on chain (`shopStats`: booked, refunded, claimed), and the pages show it as a claim rate before anyone books.
-- **Terms are fixed at registration.** Deposit, free-cancel window and grace can't change under an existing booking. Grace is 5 minutes to 1 day, the cancel window is at most 30 days, and a slot must start at least a minute after booking, so "only after slot + grace" always means something.
-- **Passes.** A pass is bound to one booking, this contract and this chain (EIP-712 domain), and to an expiry; the pages issue 2-minute passes. A pass works once. High-`s` (malleable) signatures are rejected. The shop can rotate its check-in key, and smart-contract wallets can sign through EIP-1271. A pass is a bearer token for its 2 minutes, but the refund always goes to the wallet that booked.
-- **Escape hatch.** If a shop vanishes (lost key), the guest can `reclaim` a still-held deposit 30 days after the slot. Shops can `transferShop` and `setPayout`.
+- **The shop attests attendance** by signing the guest's pass. A shop could withhold the pass and claim anyway. So each shop's record is public and kept on chain in `shopStats`: when it registered, how many different guests booked, and how many bookings were checked in, cancelled, refunded by the shop, reclaimed or claimed. The pages show the claim rate before anyone books: claimed ÷ (checked in + claimed), so cancellations can't dilute it. A shop can't book its own slots (owner, payout and signer are refused). Even so, the rate is a soft signal, not proof, since someone can still book from other wallets. The pages also show the owner address, so a guest can tell a real shop from a copy with the same name.
+- **Terms are fixed at registration.** Deposit, free-cancel window and grace can't change under an existing booking. Grace is 5 minutes to 1 day, the cancel window is at most 30 days, and a slot must start between one minute and one year after booking, so "only after slot + grace" always means something.
+- **Passes.** A pass is bound to one booking, this contract and this chain (EIP-712 domain), and to an expiry; the pages issue 3-minute passes that count down in chain time. A pass works once, and high-`s` (malleable) signatures are rejected. The signer can be a plain key or an EIP-7702 delegated account, which is verified by `ecrecover` first. It can also be a smart-contract wallet via EIP-1271, which gets a 50k gas cap and at most 32 bytes of return data. A pass is a bearer token for its 3 minutes, but the refund always goes to the wallet that booked.
+- **Keys.** The owner can move pass signing to a separate check-in key kept on the shop's tablet ("Use a key on this device"). That key signs passes without a wallet prompt and can't claim or refund anything. Owners can also change the payout address, pause bookings or transfer the shop.
+- **Claim deadline and escape hatch.** A shop must claim a no-show within 30 days after slot + grace. After that, or if the shop vanished, the guest can `reclaim` a still-held deposit.
 - **Payouts can't get stuck.** A payout is pushed with a gas cap. If the transfer fails (for example, a recipient contract that reverts or needs more gas), the amount is parked as a withdrawable credit (`owed`, `withdraw`), and the booking still settles.
-- **Accounting.** The contract balance always equals deposits held plus credits owed, plus anything force-sent to it (Foundry invariants over random book / cancel / check-in / release / claim / reclaim / force-send / time-travel sequences, 256 runs × depth 100).
+- **Accounting.** The contract balance always equals deposits held plus credits owed, plus anything force-sent to it. Foundry invariants check this over random sequences of book, cancel, check-in, release, claim, reclaim, force-send, withdraw and time travel (256 runs × depth 100). One of the random customers is a contract that refuses pushed refunds, so the `owed`/`withdraw` path is exercised too. The shop counters always match the per-state counts.
 
 ## Verify it in two minutes
 1. Open https://ryugi62.github.io/showup/. It shows the live shops, their claim rates and the latest bookings, read straight from chain.
@@ -46,11 +50,12 @@ never comes                            │  only after slot + grace (≥ 5 min)
 3. Run it locally:
 ```bash
 npm install
-forge test                     # 37 unit/fuzz tests + 3 invariants
+forge test                     # 43 unit/fuzz tests + 3 invariants
 node --test tests/*.test.mjs   # web domain helpers + ABI sync
 npm run e2e                    # Anvil (chain id 5042): deploy, book, check in, no-show, claim
 node scripts/smoke-web.mjs     # the real pages in headless Chromium with an injected wallet:
-                               # register shop → book → QR → guest check-in → tablet check-in → no-show claim
+                               # register shop → device check-in key → book → QR → guest check-in →
+                               # wallet-less phone path → tablet check-in → no-show claim → public record
 ```
 
 ## Pages
@@ -59,7 +64,7 @@ node scripts/smoke-web.mjs     # the real pages in headless Chromium with an inj
 - `shop.html?shop=N` — anyone can view it. The owner's wallet can show a check-in QR (signed in the wallet, no transaction), check a guest in from the shop's device, claim no-shows (with a confirmation step) or refund. It also has the shareable booking link and a form to register a shop.
 - `checkin.html#p=…` — what the guest's phone opens from the QR. Opened in a plain browser, it points to the wallet app and doesn't show a dead button.
 
-No third-party scripts are loaded at runtime. viem and the QR encoder are vendored into `web/vendor/` (`npm run vendor`).
+No third-party scripts are loaded at runtime. viem and the QR encoder are vendored into `web/vendor/` (`npm run vendor`), their SHA-256 is recorded in `web/vendor/SHA256SUMS`, and CI rebuilds them and checks the hashes (`npm run vendor:check`). Every write is simulated first, so a would-be revert shows up as a plain sentence before the wallet asks for anything.
 
 ## Layout
 `contracts/ShowUp.sol` (the domain, on chain) · `contracts/test/` (Foundry unit, fuzz and invariant tests) · `web/domain.js` (pure helpers, unit-tested) · `web/chain.js` (the only RPC and wallet code) · `web/abi.js` (generated, checked against the build) · `scripts/` (flow, e2e, smoke, deploy) · `SPEC.md` (purpose, numbers, Given/When/Then).
@@ -67,7 +72,7 @@ No third-party scripts are loaded at runtime. viem and the QR encoder are vendor
 ## Status and next
 This is a proof of concept, and it is not audited. With a microgrant, the next four weeks would be:
 1. A pilot with 3 shops. The measure is the no-show rate before and after, and the share of deposits refunded at the door.
-2. A shop tablet mode that submits every check-in, so guests never pay gas.
+2. Gas sponsorship for the shop tablet, so that every check-in is submitted by the shop and guests never pay gas. Today the tablet can already submit check-ins, paying from the owner wallet.
 3. A card-to-USDC on-ramp for guests without a wallet.
 4. A webhook for common booking tools, so a deposit is requested automatically.
 

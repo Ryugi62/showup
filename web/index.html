@@ -19,7 +19,7 @@
 <div class="card">On Arc, USDC is the gas. The deposit and the fee come out of one dollar balance: a guest needs no second token to book, and a shop needs no ETH to run. Each action costs about a cent, so a $5 deposit is worth protecting. Finality is sub-second, so the refund is final before the guest reaches the table. Measured fees and confirmation times are in the <a href="https://github.com/Ryugi62/showup#arc-mainnet">README</a>.</div>
 
 <h2>Trust model</h2>
-<div class="card">The shop attests that you came by signing your pass. A shop could withhold the pass and claim anyway — so every shop's record is public: bookings, refunds and no-show claims are counted on chain and shown above as its claim rate. No admin key exists; the deployer cannot touch deposits. If a shop disappears, the guest can take a still-held deposit back 30 days after the slot.</div>
+<div class="card">The shop attests that you came by signing your pass. A shop could withhold the pass and claim anyway, so every shop's record is public and counted on chain: its age, how many different guests booked, how many checked in and how many deposits it claimed as no-shows. That claim rate is a signal, not proof — check it before you book. A shop can't book itself, and terms can't change after registration. No admin key exists; the deployer cannot touch deposits. If a shop doesn't claim within 30 days after the slot, or disappears, the guest can take a still-held deposit back.</div>
 <p class="muted">Read-only page: no wallet needed. The contract links to the Arc explorer, where every transaction is visible.</p>
 </main>
 <script type="module">
@@ -31,8 +31,8 @@ async function render() {
   if (!deployed()) { el.textContent = "Contract address not configured yet."; return; }
   const [o, now] = await Promise.all([overview(), nowSec()]);
   const shops = Object.values(o.shops).filter((s) => s.exists).map((s) => {
-    const rate = claimRate(s.refunded, s.claimed);
-    return `<div class="card row"><div><b>${esc(s.name)}</b> <span class="muted">#${s.id}</span><div class="muted">deposit ${formatUsdc(s.deposit)} USDC · ${s.booked} booked · ${s.refunded} refunded · ${s.claimed} claimed${rate === null ? "" : ` · claim rate ${rate}%`}</div></div><a class="btn" href="book.html?shop=${s.id}">Book</a></div>`;
+    const rate = claimRate(s.checkedIn, s.claimed);
+    return `<div class="card row"><div><b>${esc(s.name)}</b> <span class="muted">#${s.id} · owner <a class="mono" href="${addrUrl(s.owner)}">${s.owner.slice(0, 8)}…</a></span><div class="muted">deposit ${formatUsdc(s.deposit)} USDC · since ${new Date(Number(s.since) * 1000).toLocaleDateString()} · ${s.booked} booked by ${s.uniqueCustomers} guests · ${s.checkedIn} checked in · ${s.claimed} no-shows claimed${rate === null ? "" : ` · claim rate ${rate}%`}</div></div><a class="btn" href="book.html?shop=${s.id}">Book</a></div>`;
   }).join("");
   const rows = o.bookings.map((b) => {
     const s = o.shops[b.shopId.toString()];

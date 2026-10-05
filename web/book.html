@@ -13,29 +13,33 @@
 <h2>My bookings</h2><div id="mine" class="muted">Connect your wallet to see your bookings. <button class="ghost" id="conn">Connect</button></div>
 </main>
 <script type="module">
-import { book, cancel, withdraw, readShop, readBooking, connect, txUrl, nowSec, bookingsOfCustomer, pub, hasWallet } from "./chain.js";
+import { book, cancel, withdraw, reclaim, readShop, connect, txUrl, addrUrl, nowSec, bookingsOfCustomer, pub, hasWallet } from "./chain.js";
 import { CONFIG } from "./config.js";
 import { abi } from "./abi.js";
-import { formatUsdc, actionsFor, STATUS, escapeHtml, formatSlot } from "./domain.js";
+import { formatUsdc, actionsFor, STATUS, escapeHtml, formatSlot, claimRate } from "./domain.js";
 import { $, msg, fail, walletBanner } from "./ui.js";
 const q = new URLSearchParams(location.search); $("shop").value = q.get("shop") || CONFIG.demoShopId || 1;
 $("tz").textContent = "(" + Intl.DateTimeFormat().resolvedOptions().timeZone + ")";
 walletBanner($("nowallet"));
-let shop, me;
+let shop, me, seq = 0;
 async function loadShop() {
   $("go").disabled = true; shop = null;
+  const mySeq = ++seq;
   const s = await readShop($("shop").value);
+  if (mySeq !== seq) return; // a newer shop number was typed meanwhile
   if (!s.exists) { $("title").textContent = "Book a slot"; $("terms").textContent = "No shop with that number."; return; }
   if (!s.active) { $("title").textContent = s.name; $("terms").textContent = "This shop is not taking bookings right now."; return; }
   shop = s;
   $("title").textContent = `Book at ${s.name}`;
   const cw = Number(s.cancelWindow) / 60, gr = Number(s.grace) / 60;
-  $("terms").textContent = `Deposit ${formatUsdc(s.deposit)} USDC. Free cancel ${cw ? `until ${cw} min before your time` : "until your time"}. Refunded the moment you check in. If you don't come, the shop can claim it ${gr} min after your time. This shop: ${s.booked} booked, ${s.refunded} refunded, ${s.claimed} claimed.`;
+  const rate = claimRate(s.checkedIn, s.claimed);
+  $("terms").innerHTML = `Deposit ${formatUsdc(s.deposit)} USDC. Free cancel ${cw ? `until ${cw} min before your time` : "until your time"}. Refunded the moment you check in. If you don't come, the shop can claim it ${gr} min after your time.<br><span class="muted">Shop record (on chain): owner <a class="mono" href="${addrUrl(s.owner)}">${s.owner.slice(0, 10)}…</a> · since ${new Date(Number(s.since) * 1000).toLocaleDateString()} · ${s.uniqueCustomers} guests · ${s.checkedIn} checked in · ${s.claimed} no-shows claimed${rate === null ? "" : ` · claim rate ${rate}%`}. Make sure the owner address matches the one the shop gave you.</span>`;
   const d = new Date(Date.now() + (Number(s.cancelWindow) + 7200) * 1000); d.setMinutes(0, 0, 0); // ≥ 1 h after the cutoff
   $("slot").value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   $("go").disabled = !hasWallet();
 }
 $("shop").oninput = () => loadShop().catch(fail);
+$("shop").onchange = () => loadShop().catch(fail);
 $("go").onclick = async () => {
   try {
     if (!shop) return;
@@ -44,7 +48,7 @@ $("go").onclick = async () => {
     if (!Number.isFinite(slot) || slot < now + lead) { msg(`Pick a time at least ${Math.ceil(lead / 60)} min from now.`, "err"); return; }
     $("go").disabled = true; msg("Confirm in your wallet…");
     const r = await book(shop.id, slot, shop.deposit);
-    msg(`Booked for ${formatSlot(slot)}. Confirmed in ${r.ms} ms · <a href="${txUrl(r.hash)}">view on explorer</a>`, "ok"); listMine();
+    msg(`Booked for ${formatSlot(slot)}. Confirmed in ${r.ms} ms · <a href="${txUrl(r.hash)}">view on explorer</a>`, "ok"); listMine().catch(fail);
   } catch (e) { fail(e); } finally { $("go").disabled = !shop || !hasWallet(); }
 };
 async function listMine() {
@@ -55,13 +59,16 @@ async function listMine() {
   for (const b of mine) {
     const s = shops[b.shopId] ||= await readShop(b.shopId);
     const a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
-    rows.push(`<div class="card row"><div><b>#${b.id}</b> · ${escapeHtml(s.name)}<div class="muted">${formatSlot(b.slotStart)} · ${formatUsdc(b.amount)} USDC</div></div><div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}</span> ${a.cancel ? `<button class="ghost" data-c="${b.id}">Cancel (full refund)</button>` : ""}</div></div>`);
+    rows.push(`<div class="card row"><div><b>#${b.id}</b> · ${escapeHtml(s.name)}<div class="muted">${formatSlot(b.slotStart)} · ${formatUsdc(b.amount)} USDC</div></div><div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}</span> ${a.cancel ? `<button class="ghost" data-c="${b.id}">Cancel (full refund)</button>` : ""} ${a.reclaim ? `<button class="ghost" data-r="${b.id}">Take it back (shop never settled)</button>` : ""}</div></div>`);
   }
   $("mine").innerHTML = (owedAmt > 0n ? `<div class="card row"><div>${formatUsdc(owedAmt)} USDC is waiting for you (a payout your wallet could not receive automatically).</div><button id="wd">Withdraw</button></div>` : "") + (rows.join("") || "No bookings from this wallet yet.");
   document.querySelectorAll("[data-c]").forEach((btn) => btn.onclick = async () => {
-    try { btn.disabled = true; const r = await cancel(btn.dataset.c); msg(`Cancelled and refunded in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine(); } catch (e) { fail(e); btn.disabled = false; }
+    try { btn.disabled = true; const r = await cancel(btn.dataset.c); msg(`Cancelled and refunded in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine().catch(fail); } catch (e) { fail(e); btn.disabled = false; }
   });
-  $("wd")?.addEventListener("click", async () => { try { const r = await withdraw(); msg(`Withdrawn · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine(); } catch (e) { fail(e); } });
+  document.querySelectorAll("[data-r]").forEach((btn) => btn.onclick = async () => {
+    try { btn.disabled = true; const r = await reclaim(btn.dataset.r); msg(`Deposit taken back · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine().catch(fail); } catch (e) { fail(e); btn.disabled = false; }
+  });
+  $("wd")?.addEventListener("click", async () => { try { const r = await withdraw(); msg(`Withdrawn · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine().catch(fail); } catch (e) { fail(e); } });
 }
 $("conn").onclick = () => listMine().catch(fail);
 loadShop().catch(fail);

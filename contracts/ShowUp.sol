@@ -8,7 +8,8 @@ pragma solidity ^0.8.28;
 ///         not the deployer — can take a deposit early. There is no owner and no upgrade path.
 /// @dev On Arc, USDC is the native gas asset with 18 decimals, so deposits are plain msg.value.
 ///      Trust model: the shop attests attendance by signing the pass. A shop that withholds the
-///      pass and claims anyway is visible on chain through `shopStats` (its claim rate).
+///      pass and claims anyway is visible on chain through `shopStats` (its claim rate) — a soft
+///      signal, not proof: a shop can self-book, so the record also shows unique customers.
 contract ShowUp {
     enum Status {
         None,
@@ -36,16 +37,24 @@ contract ShowUp {
         Status status;
     }
 
+    /// Public shop record. Outcomes are counted separately so the claim rate
+    /// (claimed / (checkedIn + claimed)) is not diluted by cancellations or self-refunds.
     struct Stats {
         uint64 booked;
-        uint64 refunded;
+        uint64 checkedIn;
+        uint64 cancelled;
+        uint64 released;
+        uint64 reclaimed;
         uint64 claimed;
+        uint64 uniqueCustomers;
+        uint64 since; // registration time — a fresh shop id has no history
     }
 
     error BadConfig();
     error ShopInactive();
     error WrongDeposit();
     error SlotTooSoon();
+    error SlotTooFar();
     error NotAllowed();
     error NotHeld();
     error TooLateToCancel();
@@ -73,10 +82,13 @@ contract ShowUp {
     uint64 public constant MAX_GRACE = 1 days;
     uint64 public constant MAX_CANCEL_WINDOW = 30 days;
     uint64 public constant MIN_LEAD = 60; // a slot must start at least a minute after booking
+    uint64 public constant MAX_HORIZON = 365 days; // and at most a year ahead
     /// If a shop disappears (lost key), the customer can take a still-held deposit back after this.
     uint64 public constant RECLAIM_AFTER = 30 days;
     /// Gas forwarded with a payout; a recipient that needs more (or refuses) gets a withdrawable credit.
     uint256 internal constant SEND_GAS = 100_000;
+    /// Gas allowed for an EIP-1271 signer contract to answer.
+    uint256 internal constant ERC1271_GAS = 50_000;
 
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -88,6 +100,7 @@ contract ShowUp {
     mapping(uint256 => Booking) public bookings;
     mapping(uint256 => Stats) public shopStats;
     mapping(address => uint256) public owed;
+    mapping(uint256 => mapping(address => bool)) private _seen;
     mapping(uint256 => uint256[]) private _byShop;
     mapping(address => uint256[]) private _byCustomer;
     uint256 public shopCount;
@@ -120,6 +133,7 @@ contract ShowUp {
         ) revert BadConfig();
         shopId = ++shopCount;
         shops[shopId] = Shop(msg.sender, payout, signer, deposit, cancelWindow, grace, true, name);
+        shopStats[shopId].since = uint64(block.timestamp);
         emit ShopRegistered(shopId, msg.sender, deposit, cancelWindow, grace, name);
     }
 
@@ -158,11 +172,19 @@ contract ShowUp {
         if (msg.value != s.deposit) revert WrongDeposit();
         uint256 lead = s.cancelWindow > MIN_LEAD ? s.cancelWindow : MIN_LEAD;
         if (uint256(slotStart) < block.timestamp + lead) revert SlotTooSoon();
+        if (uint256(slotStart) > block.timestamp + MAX_HORIZON) revert SlotTooFar();
+        // a shop cannot book itself: self-bookings would only wash its public record
+        if (msg.sender == s.owner || msg.sender == s.payout || msg.sender == s.signer) revert NotAllowed();
         bookingId = ++bookingCount;
         bookings[bookingId] = Booking(shopId, msg.sender, slotStart, msg.value, Status.Held);
         _byShop[shopId].push(bookingId);
         _byCustomer[msg.sender].push(bookingId);
-        shopStats[shopId].booked++;
+        Stats storage st = shopStats[shopId];
+        st.booked++;
+        if (!_seen[shopId][msg.sender]) {
+            _seen[shopId][msg.sender] = true;
+            st.uniqueCustomers++;
+        }
         totalHeld += msg.value;
         emit Booked(bookingId, shopId, msg.sender, slotStart, msg.value);
     }
@@ -173,6 +195,7 @@ contract ShowUp {
         if (msg.sender != b.customer) revert NotAllowed();
         if (block.timestamp >= uint256(b.slotStart) - shops[b.shopId].cancelWindow) revert TooLateToCancel();
         uint256 amount = _refund(b);
+        shopStats[b.shopId].cancelled++;
         emit Cancelled(bookingId, b.customer, amount);
         _send(b.customer, amount);
     }
@@ -186,6 +209,7 @@ contract ShowUp {
         if (block.timestamp >= uint256(b.slotStart) + s.grace) revert TooLate();
         if (!_validPass(s.signer, passDigest(bookingId, validUntil), pass)) revert BadPass();
         uint256 amount = _refund(b);
+        shopStats[b.shopId].checkedIn++;
         emit CheckedIn(bookingId, b.customer, amount);
         _send(b.customer, amount);
     }
@@ -195,6 +219,7 @@ contract ShowUp {
         Booking storage b = _held(bookingId);
         if (msg.sender != shops[b.shopId].owner) revert NotAllowed();
         uint256 amount = _refund(b);
+        shopStats[b.shopId].released++;
         emit Released(bookingId, b.customer, amount);
         _send(b.customer, amount);
     }
@@ -206,6 +231,7 @@ contract ShowUp {
         if (msg.sender != b.customer) revert NotAllowed();
         if (block.timestamp < uint256(b.slotStart) + shops[b.shopId].grace + RECLAIM_AFTER) revert TooEarly();
         uint256 amount = _refund(b);
+        shopStats[b.shopId].reclaimed++;
         emit Reclaimed(bookingId, b.customer, amount);
         _send(b.customer, amount);
     }
@@ -278,7 +304,6 @@ contract ShowUp {
         amount = b.amount;
         b.status = Status.Refunded;
         totalHeld -= amount;
-        shopStats[b.shopId].refunded++;
     }
 
     /// Push the payout; if the recipient refuses (blocked address, reverting contract, gas-hungry
@@ -300,17 +325,28 @@ contract ShowUp {
     }
 
     function _validPass(address signer, bytes32 digest, bytes calldata sig) private view returns (bool) {
-        if (signer.code.length > 0) {
-            (bool ok, bytes memory ret) =
-                signer.staticcall(abi.encodeWithSelector(ERC1271_MAGIC, digest, sig));
-            return ok && ret.length >= 32 && abi.decode(ret, (bytes4)) == ERC1271_MAGIC;
+        // Plain signatures first: this also covers EIP-7702 delegated EOAs, which have code but a real key.
+        if (sig.length == 65) {
+            bytes32 r = bytes32(sig[0:32]);
+            bytes32 s = bytes32(sig[32:64]);
+            uint8 v = uint8(sig[64]);
+            if (uint256(s) <= HALF_N && (v == 27 || v == 28)) {
+                address got = ecrecover(digest, v, r, s);
+                if (got != address(0) && got == signer) return true;
+            }
         }
-        if (sig.length != 65) return false;
-        bytes32 r = bytes32(sig[0:32]);
-        bytes32 s = bytes32(sig[32:64]);
-        uint8 v = uint8(sig[64]);
-        if (uint256(s) > HALF_N || (v != 27 && v != 28)) return false;
-        address got = ecrecover(digest, v, r, s);
-        return got != address(0) && got == signer;
+        if (signer.code.length == 0) return false;
+        // EIP-1271 contract signer: bounded gas, at most 32 bytes of return data copied, magic compared by hand.
+        bytes memory data = abi.encodeWithSelector(ERC1271_MAGIC, digest, sig);
+        bool ok;
+        bytes32 word;
+        uint256 size;
+        uint256 g = ERC1271_GAS;
+        assembly {
+            ok := staticcall(g, signer, add(data, 0x20), mload(data), 0, 0x20)
+            size := returndatasize()
+            word := mload(0)
+        }
+        return ok && size >= 32 && bytes4(word) == ERC1271_MAGIC;
     }
 }
