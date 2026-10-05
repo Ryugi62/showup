@@ -32,6 +32,7 @@ test("actionsFor mirrors contract windows", () => {
   const b = { status: 1, slotStart: 10_000, cancelWindow: 3600, grace: 900 };
   assert.deepEqual(actionsFor(b, 6_399), { cancel: true, checkIn: true, claim: false, release: true, reclaim: false, claimBy: 10_900 + 30 * 24 * 3600, phase: "free-cancel" });
   assert.equal(actionsFor(b, 10_900 + 30 * 24 * 3600).reclaim, true);
+  assert.equal(actionsFor(b, 10_900 + 30 * 24 * 3600).claim, false); // the claim window closes as reclaim opens
   assert.equal(actionsFor(b, 6_400).cancel, false);
   assert.equal(actionsFor(b, 10_899).checkIn, true);
   assert.equal(actionsFor(b, 10_900).checkIn, false);
@@ -76,4 +77,18 @@ import { secondsLeft } from "../web/domain.js";
 test("secondsLeft counts in chain time", () => {
   assert.equal(secondsLeft(1000, 900, 0), 100);
   assert.equal(secondsLeft(1000, 900, 50), 50); // chain is 50 s ahead of the device
+});
+
+import { recordLabel } from "../web/domain.js";
+test("recordLabel withholds a percentage for thin or young records", () => {
+  const day = 86400;
+  assert.match(recordLabel({ checkedIn: 2, claimed: 0, since: 0 }, 100 * day), /new shop/);
+  assert.match(recordLabel({ checkedIn: 20, claimed: 5, since: 90 * day }, 100 * day), /new shop/); // 10 days old
+  assert.equal(recordLabel({ checkedIn: 18, claimed: 2, since: 0, uniqueCustomers: 15 }, 100 * day), "claim rate 10% over 20 guests who reached their slot (recorded on chain)");
+  assert.match(recordLabel({ checkedIn: 18, claimed: 2, since: 0, uniqueCustomers: 3 }, 100 * day), /new shop/); // sybil-thin
+});
+
+import { feeUsd } from "../web/domain.js";
+test("feeUsd: Arc gas × gas price is already dollars", () => {
+  assert.equal(feeUsd(150000n, 20_000_000_000n), 0.003); // 150k gas at Arc's 20 gwei floor ≈ $0.003
 });

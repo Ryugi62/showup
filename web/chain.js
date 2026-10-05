@@ -2,7 +2,7 @@
 import { createPublicClient, createWalletClient, custom, http, defineChain, decodeEventLog, privateKeyToAccount, generatePrivateKey } from "./vendor/viem.js";
 import { CONFIG } from "./config.js";
 import { abi } from "./abi.js";
-import { passTypedData } from "./domain.js";
+import { passTypedData, feeUsd } from "./domain.js";
 
 export { abi };
 export const arc = defineChain({
@@ -110,6 +110,18 @@ async function write(functionName, args, value) {
   const receipt = await pub.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("Transaction reverted");
   return { hash, ms: Math.round(performance.now() - t0), receipt };
+}
+
+/** Exact network fee in dollars before pressing a button: Arc gas is USDC, so gas × gasPrice needs no oracle. */
+export async function estimateFee(functionName, args, value) {
+  if (!account) return null;
+  try {
+    const [gas, price] = await Promise.all([
+      pub.estimateContractGas({ address: address(), abi, functionName, args, value, account }),
+      pub.getGasPrice(),
+    ]);
+    return { gas, usd: feeUsd(gas, price) };
+  } catch { return null; }
 }
 
 export const book = (shopId, slotStart, value) => write("book", [BigInt(shopId), BigInt(slotStart)], value);

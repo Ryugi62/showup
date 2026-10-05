@@ -88,7 +88,7 @@ contract ShowUp {
     /// Gas forwarded with a payout; a recipient that needs more (or refuses) gets a withdrawable credit.
     uint256 internal constant SEND_GAS = 100_000;
     /// Gas allowed for an EIP-1271 signer contract to answer.
-    uint256 internal constant ERC1271_GAS = 50_000;
+    uint256 internal constant ERC1271_GAS = 150_000; // enough for multi-owner Safes / 4337 accounts
 
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -242,6 +242,8 @@ contract ShowUp {
         Shop storage s = shops[b.shopId];
         if (msg.sender != s.owner) revert NotAllowed();
         if (block.timestamp < uint256(b.slotStart) + s.grace) revert TooEarly();
+        // claim window closes when the guest's reclaim opens — no race between the two
+        if (block.timestamp >= uint256(b.slotStart) + s.grace + RECLAIM_AFTER) revert TooLate();
         uint256 amount = b.amount;
         b.status = Status.Claimed;
         totalHeld -= amount;
@@ -342,7 +344,7 @@ contract ShowUp {
         bytes32 word;
         uint256 size;
         uint256 g = ERC1271_GAS;
-        assembly {
+        assembly ("memory-safe") {
             ok := staticcall(g, signer, add(data, 0x20), mload(data), 0, 0x20)
             size := returndatasize()
             word := mload(0)

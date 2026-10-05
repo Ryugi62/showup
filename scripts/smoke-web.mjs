@@ -34,6 +34,8 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  const cspWatch = (pg, tag) => pg.on("console", (m) => { if (m.type() === "error" && /Content Security Policy|Refused to/.test(m.text())) errors.push(`${tag} CSP: ${m.text()}`); });
+  cspWatch(page, "index");
   await page.goto(`http://127.0.0.1:${WEB}/index.html`);
   steps.push(37); await page.waitForSelector(".stat", { timeout: 20000 });
   const text = await page.textContent("#live");
@@ -61,7 +63,7 @@ try {
   const ctxOwner = await browser.newContext(); await ctxOwner.addInitScript(shim(OWNER));
   const ctxGuest = await browser.newContext(); await ctxGuest.addInitScript(shim(GUEST));
   const shopPage = await ctxOwner.newPage(); pages.shop = shopPage;
-  shopPage.on("pageerror", (e) => errors.push("shop: " + e.message));
+  shopPage.on("pageerror", (e) => errors.push("shop: " + e.message)); cspWatch(shopPage, "shop");
   shopPage.on("dialog", (d) => d.accept());
   await shopPage.goto(`http://127.0.0.1:${WEB}/shop.html`);
   await shopPage.fill("#name", "UI Test Bistro"); await shopPage.fill("#dep", "0.2"); await shopPage.fill("#cw", "0"); await shopPage.fill("#gr", "5");
@@ -76,7 +78,7 @@ try {
   const guestPage = await ctxGuest.newPage(); pages.guest = guestPage;
   const chainNow = async () => Number(BigInt((await call("eth_getBlockByNumber", ["latest", false])).timestamp));
   const setSlot = async (sec) => guestPage.evaluate((t) => { const d = new Date(t * 1000); document.getElementById("slot").value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }, sec);
-  guestPage.on("pageerror", (e) => errors.push("guest: " + e.message));
+  guestPage.on("pageerror", (e) => errors.push("guest: " + e.message)); cspWatch(guestPage, "guest");
   await guestPage.goto(`http://127.0.0.1:${WEB}/book.html?shop=${newShop}`);
   steps.push(73); await guestPage.waitForFunction(() => document.getElementById("terms").textContent.includes("0.2 USDC"));
   await setSlot((await chainNow()) + 3 * 3600);
@@ -105,7 +107,7 @@ try {
   // a guest whose phone opens the QR in a plain browser gets the wallet-app path, on a phone-sized screen
   const heldLink = await shopPage.evaluate(() => document.querySelector("#qrnote a")?.href);
   const phone = await (await browser.newContext({ viewport: { width: 375, height: 760 }, deviceScaleFactor: 2 })).newPage();
-  phone.on("pageerror", (e) => errors.push("phone: " + e.message));
+  phone.on("pageerror", (e) => errors.push("phone: " + e.message)); cspWatch(phone, "phone");
   await phone.goto(heldLink);
   await phone.waitForSelector("#nowallet:not([hidden])", { timeout: 20000 });
   if (!(await phone.textContent("#nowallet")).includes("Open in MetaMask")) throw new Error("wallet-less banner missing");

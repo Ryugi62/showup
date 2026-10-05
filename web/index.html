@@ -1,5 +1,6 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://rpc.mainnet.arc.io http://127.0.0.1:8547 http://127.0.0.1:8548; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ShowUp — refundable booking deposits on Arc</title><link rel="stylesheet" href="style.css"></head>
 <body><main>
 <header class="top"><a href="./">ShowUp</a><nav><a href="book.html">Book</a><a href="shop.html">For shops</a><a href="https://github.com/Ryugi62/showup">Code</a></nav></header>
@@ -8,7 +9,7 @@
 
 <ol class="steps">
   <li><b>Book.</b> Lock the shop's deposit for a time slot. Free cancellation until the shop's cutoff.</li>
-  <li><b>Walk in.</b> The shop shows a QR — a check-in pass signed by its key, valid for two minutes. Submitting it refunds the deposit to the wallet that booked (the shop's tablet can submit it, so the guest needs no gas).</li>
+  <li><b>Walk in.</b> The shop shows a QR — a check-in pass signed by its key, valid for three minutes. Submitting it refunds the deposit to the wallet that booked (the shop's tablet can submit it, so the guest needs no gas).</li>
   <li><b>Or don't.</b> Only after the slot plus the shop's grace period (at least 5 minutes) can the shop claim it, and only to its payout address.</li>
 </ol>
 
@@ -22,27 +23,5 @@
 <div class="card">The shop attests that you came by signing your pass. A shop could withhold the pass and claim anyway, so every shop's record is public and counted on chain: its age, how many different guests booked, how many checked in and how many deposits it claimed as no-shows. That claim rate is a signal, not proof — check it before you book. A shop can't book itself, and terms can't change after registration. No admin key exists; the deployer cannot touch deposits. If a shop doesn't claim within 30 days after the slot, or disappears, the guest can take a still-held deposit back.</div>
 <p class="muted">Read-only page: no wallet needed. The contract links to the Arc explorer, where every transaction is visible.</p>
 </main>
-<script type="module">
-import { CONFIG } from "./config.js";
-import { overview, deployed, addrUrl, nowSec } from "./chain.js";
-import { formatUsdc, STATUS, actionsFor, escapeHtml as esc, formatSlot, claimRate } from "./domain.js";
-const el = document.getElementById("live");
-async function render() {
-  if (!deployed()) { el.textContent = "Contract address not configured yet."; return; }
-  const [o, now] = await Promise.all([overview(), nowSec()]);
-  const shops = Object.values(o.shops).filter((s) => s.exists).map((s) => {
-    const rate = claimRate(s.checkedIn, s.claimed);
-    return `<div class="card row"><div><b>${esc(s.name)}</b> <span class="muted">#${s.id} · owner <a class="mono" href="${addrUrl(s.owner)}">${s.owner.slice(0, 8)}…</a></span><div class="muted">deposit ${formatUsdc(s.deposit)} USDC · since ${new Date(Number(s.since) * 1000).toLocaleDateString()} · ${s.booked} booked by ${s.uniqueCustomers} guests · ${s.checkedIn} checked in · ${s.claimed} no-shows claimed${rate === null ? "" : ` · claim rate ${rate}%`}</div></div><a class="btn" href="book.html?shop=${s.id}">Book</a></div>`;
-  }).join("");
-  const rows = o.bookings.map((b) => {
-    const s = o.shops[b.shopId.toString()];
-    const a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
-    return `<div class="card row"><div><b>#${b.id}</b> · ${esc(s.name)}<div class="muted">${formatSlot(b.slotStart)} · ${formatUsdc(b.amount)} USDC · <span class="mono">${b.customer.slice(0, 8)}…</span></div></div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}${STATUS[b.status] === "Held" ? " · " + a.phase : ""}</span></div>`;
-  }).join("");
-  el.innerHTML = `<div class="grid3"><div class="card"><div class="muted">Shops</div><div class="stat">${o.shopCount}</div></div><div class="card"><div class="muted">Bookings</div><div class="stat">${o.bookingCount}</div></div><div class="card"><div class="muted">Deposits held now</div><div class="stat">${formatUsdc(o.totalHeld)} USDC</div></div></div>
-  <p class="muted">Contract <a class="mono" href="${addrUrl(CONFIG.contract)}">${CONFIG.contract}</a> on Arc (chain ${CONFIG.chainId})</p>
-  <h3>Shops</h3>${shops || '<p class="muted">No shops yet.</p>'}<h3>Latest bookings</h3>${rows || '<p class="muted">No bookings yet.</p>'}`;
-}
-render().catch((e) => { el.textContent = "Could not read the chain: " + e.message; });
-</script>
+<script type="module" src="index.js"></script>
 </body></html>

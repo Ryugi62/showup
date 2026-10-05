@@ -48,7 +48,7 @@ export function actionsFor({ status, slotStart, cancelWindow, grace }, nowSec) {
   return {
     cancel: now < cancelUntil,
     checkIn: now < claimFrom,
-    claim: now >= claimFrom,
+    claim: now >= claimFrom && now < reclaimFrom,
     release: true,
     reclaim: now >= reclaimFrom,
     claimBy: reclaimFrom,
@@ -113,6 +113,21 @@ export function formatSlot(sec, locale = undefined, timeZone = undefined) {
 export function claimRate(checkedIn, claimed) {
   const r = Number(checkedIn), c = Number(claimed);
   return r + c === 0 ? null : Math.round((c / (r + c)) * 100);
+}
+
+/** What to print for a shop's record: a percentage only once there is enough history to mean something. */
+export const MIN_HISTORY = 10, MIN_GUESTS = 10, MIN_AGE_SEC = 30 * 24 * 3600;
+export function recordLabel({ checkedIn, claimed, since, uniqueCustomers = 0 }, nowSec) {
+  const settled = Number(checkedIn) + Number(claimed);
+  const young = Number(nowSec) - Number(since) < MIN_AGE_SEC;
+  if (settled < MIN_HISTORY || Number(uniqueCustomers) < MIN_GUESTS || young)
+    return `new shop — not enough history yet (${settled} settled, ${uniqueCustomers} guests, ${young ? "under 30 days old" : "30+ days old"})`;
+  return `claim rate ${claimRate(checkedIn, claimed)}% over ${settled} guests who reached their slot (recorded on chain)`;
+}
+
+/** Arc gas is priced in USDC, so a fee in dollars is just gas × gasPrice — no price oracle. */
+export function feeUsd(gas, gasPriceWei) {
+  return Number(BigInt(gas) * BigInt(gasPriceWei)) / 1e18;
 }
 
 /** Countdown helper that uses chain time: skew = chainNow − deviceNow at the moment we read the chain. */

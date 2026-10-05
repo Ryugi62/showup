@@ -482,6 +482,16 @@ contract ShowUpTest is Test {
         r.doWithdraw();
     }
 
+    function test_claim_windowClosesWhenReclaimOpens() public {
+        uint256 id = _book(alice);
+        vm.warp(slot + GRACE + 30 days);
+        vm.prank(owner);
+        vm.expectRevert(ShowUp.TooLate.selector);
+        su.claim(id);
+        vm.prank(alice);
+        su.reclaim(id);
+    }
+
     function test_book_tooFarAhead_reverts() public {
         vm.prank(alice);
         vm.expectRevert(ShowUp.SlotTooFar.selector);
