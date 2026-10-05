@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Book — ShowUp</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<header class="top"><a href="./">ShowUp</a><nav><a href="book.html">Book</a><a href="shop.html">For shops</a></nav></header>
+<h1 id="title">Book a slot</h1>
+<p class="lead" id="terms">Loading shop…</p>
+<label for="shop">Shop number</label><input id="shop" type="number" min="1" value="1">
+<label for="slot">Your time</label><input id="slot" type="datetime-local">
+<p><button id="go">Lock deposit and book</button></p>
+<div id="msg"></div>
+<h2>My bookings</h2><div id="mine" class="muted">Connect your wallet by booking, or <button class="ghost" id="conn">connect</button>.</div>
+</main>
+<script type="module">
+import { book, cancel, readShop, readBooking, connect, txUrl, pub, nowSec, abi } from "./chain.js";
+import { formatUsdc, actionsFor, STATUS, escapeHtml } from "./domain.js";
+import { CONFIG } from "./config.js";
+const $ = (id) => document.getElementById(id), msg = (t, c = "") => { $("msg").className = c; $("msg").innerHTML = t; };
+const q = new URLSearchParams(location.search); if (q.get("shop")) $("shop").value = q.get("shop");
+let shop;
+async function loadShop() {
+  shop = await readShop($("shop").value);
+  if (shop.owner === "0x0000000000000000000000000000000000000000") { $("terms").textContent = "No such shop."; return; }
+  $("title").textContent = `Book at ${shop.name}`;
+  $("terms").textContent = `Deposit ${formatUsdc(shop.deposit)} USDC · free cancel until ${Number(shop.cancelWindow) / 60} min before · refunded instantly when you check in · claimable by the shop ${Number(shop.grace) / 60} min after your slot if you don't come.`;
+  const d = new Date(Date.now() + (Number(shop.cancelWindow) + 3600) * 1000); d.setMinutes(0, 0, 0);
+  $("slot").value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+$("shop").onchange = () => loadShop().catch((e) => msg(e.message, "err"));
+$("go").onclick = async () => {
+  try {
+    $("go").disabled = true; msg("Confirm in your wallet…");
+    const slot = Math.floor(new Date($("slot").value).getTime() / 1000);
+    const r = await book(shop.id, slot, shop.deposit);
+    msg(`Booked and final in ${r.ms} ms · <a href="${txUrl(r.hash)}">view on explorer</a>`, "ok"); listMine();
+  } catch (e) { msg(e.shortMessage || e.message, "err"); } finally { $("go").disabled = false; }
+};
+let me;
+async function listMine() {
+  me = me || await connect();
+  const n = await pub.readContract({ address: CONFIG.contract, abi, functionName: "bookingCount" });
+  const now = await nowSec(), out = [];
+  for (let i = n; i >= 1n && out.length < 10; i--) {
+    const b = await readBooking(i); if (b.customer.toLowerCase() !== me.toLowerCase()) continue;
+    const s = await readShop(b.shopId), a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
+    out.push(`<div class="card row"><div><b>#${b.id}</b> · ${escapeHtml(s.name)}<div class="muted">${new Date(Number(b.slotStart) * 1000).toLocaleString()} · ${formatUsdc(b.amount)} USDC</div></div><div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}</span> ${a.cancel ? `<button class="ghost" data-c="${b.id}">Cancel</button>` : ""}</div></div>`);
+  }
+  $("mine").innerHTML = out.join("") || "No bookings from this wallet yet.";
+  document.querySelectorAll("[data-c]").forEach((btn) => btn.onclick = async () => {
+    try { const r = await cancel(btn.dataset.c); msg(`Cancelled, refunded in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); listMine(); } catch (e) { msg(e.shortMessage || e.message, "err"); }
+  });
+}
+$("conn").onclick = () => listMine().catch((e) => msg(e.message, "err"));
+loadShop().catch((e) => msg(e.message, "err"));
+</script>
+</body></html>

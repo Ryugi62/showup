@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Check in — ShowUp</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<header class="top"><a href="./">ShowUp</a></header>
+<h1 id="h">Check in</h1>
+<p class="lead" id="info">Reading your pass…</p>
+<p><button id="go" disabled>Get my deposit back</button></p>
+<div id="msg"></div>
+<p class="muted">Anyone can submit a valid pass — the refund always goes to the wallet that booked. Each pass works once, for one booking, until it expires.</p>
+</main>
+<script type="module">
+import { readBooking, readShop, checkIn, txUrl } from "./chain.js";
+import { decodePass, formatUsdc, STATUS } from "./domain.js";
+import { CONFIG } from "./config.js";
+const $ = (id) => document.getElementById(id), msg = (t, c = "") => { $("msg").className = c; $("msg").innerHTML = t; };
+const p = decodePass(location.hash);
+(async () => {
+  if (!p) { $("info").textContent = "This link has no valid pass. Ask the shop to show the QR again."; return; }
+  if (p.contract.toLowerCase() !== CONFIG.contract.toLowerCase()) { $("info").textContent = "This pass is for a different ShowUp contract."; return; }
+  const b = await readBooking(p.bookingId), s = await readShop(b.shopId);
+  const left = Number(p.validUntil) - Math.floor(Date.now() / 1000);
+  $("h").textContent = `Check in at ${s.name}`;
+  $("info").textContent = `Booking #${b.id} · deposit ${formatUsdc(b.amount)} USDC · status ${STATUS[b.status]} · pass valid ${left > 0 ? Math.ceil(left / 60) + " more min" : "— expired"}`;
+  $("go").disabled = STATUS[b.status] !== "Held" || left <= 0;
+  $("go").onclick = async () => {
+    try { $("go").disabled = true; msg("Confirm in your wallet…"); const r = await checkIn(p.bookingId, p.validUntil, p.sig);
+      msg(`Refunded and final in ${r.ms} ms · <a href="${txUrl(r.hash)}">view on explorer</a>`, "ok"); $("info").textContent += " → Refunded"; }
+    catch (e) { msg(e.shortMessage || e.message, "err"); $("go").disabled = false; }
+  };
+})().catch((e) => { $("info").textContent = "Could not read the chain: " + e.message; });
+</script>
+</body></html>

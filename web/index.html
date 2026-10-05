@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ShowUp — refundable booking deposits on Arc</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<header class="top"><a href="./">ShowUp</a><nav><a href="book.html">Book</a><a href="shop.html">For shops</a><a href="https://github.com/Ryugi62/showup">Code</a></nav></header>
+<h1>A $5 deposit that comes back the moment you walk in.</h1>
+<p class="lead">Shops lose tables and appointments to no-shows, but a card deposit costs more in fees and chargebacks than it protects. ShowUp holds a small USDC deposit on Arc. Show up, and the shop's check-in pass refunds it at the door in under a second. Don't, and the shop can claim it after your slot. Nobody can take it early — there is no admin key.</p>
+
+<ol class="steps">
+  <li><b>Book.</b> The customer locks the shop's deposit (e.g. 5 USDC) for a time slot. Free cancellation until the shop's cutoff.</li>
+  <li><b>Walk in.</b> The shop shows a one-time QR (an EIP-712 pass signed by its check-in key). Scanning it refunds the deposit to the customer's wallet.</li>
+  <li><b>Or don't.</b> After the slot plus a grace period, only the shop can claim the deposit, only to its payout address.</li>
+</ol>
+
+<h2>Live on Arc mainnet</h2>
+<div id="live" class="muted">Loading from chain…</div>
+
+<h2>Why Arc</h2>
+<div class="card">Gas is paid in USDC and costs about a cent, priced in dollars — so a $5 deposit is worth protecting. Finality is sub-second, so the refund settles before the customer reaches the table. On a $5 card deposit, a typical online card rate of 2.9% + 30¢ takes about 45¢ (9%), and a card refund takes 5–10 business days to reach the customer (<a href="https://stripe.com/pricing">Stripe pricing</a>, <a href="https://support.stripe.com/questions/refunds-faq">Stripe refunds FAQ</a>).</div>
+<p class="muted">Read-only page: no wallet needed. Contract and every transaction link to the Arc explorer.</p>
+</main>
+<script type="module">
+import { CONFIG } from "./config.js";
+import { overview, deployed, addrUrl, nowSec } from "./chain.js";
+import { formatUsdc, STATUS, actionsFor, escapeHtml as esc } from "./domain.js";
+const el = document.getElementById("live");
+async function render() {
+  if (!deployed()) { el.textContent = "Contract address not configured yet."; return; }
+  const [o, now] = await Promise.all([overview(), nowSec()]);
+  const rows = o.bookings.map((b) => {
+    const s = o.shops[b.shopId.toString()];
+    const a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
+    const when = new Date(Number(b.slotStart) * 1000).toLocaleString();
+    return `<div class="card row"><div><b>#${b.id}</b> · ${esc(s.name)}<div class="muted">slot ${when} · ${formatUsdc(b.amount)} USDC · <span class="mono">${b.customer.slice(0, 8)}…</span></div></div><span class="pill ${STATUS[b.status]}">${STATUS[b.status]}${STATUS[b.status] === "Held" ? " · " + a.phase : ""}</span></div>`;
+  }).join("");
+  el.innerHTML = `<div class="grid3"><div class="card"><div class="muted">Shops</div><div class="stat">${o.shopCount}</div></div><div class="card"><div class="muted">Bookings</div><div class="stat">${o.bookingCount}</div></div><div class="card"><div class="muted">Deposits held now</div><div class="stat">${formatUsdc(o.totalHeld)} USDC</div></div></div>
+  <p class="muted">Contract <a class="mono" href="${addrUrl(CONFIG.contract)}">${CONFIG.contract}</a> on Arc (chain ${CONFIG.chainId})</p>${rows || '<p class="muted">No bookings yet.</p>'}`;
+}
+render().catch((e) => { el.textContent = "Could not read the chain: " + e.message; });
+</script>
+</body></html>
