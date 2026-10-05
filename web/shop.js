@@ -1,5 +1,5 @@
 // Page script for shop.html (external so the Content-Security-Policy can forbid inline scripts).
-import { readShop, connect, signPass, claim, release, checkIn, txUrl, addrUrl, nowSec, registerShop, bookingsOfShop, currentAccount, hasWallet, deviceKey, createDeviceKey, setSigner, setPayout, setActive, transferShop } from "./chain.js";
+import { readShop, connect, signPass, claim, release, checkIn, checkInFromDevice, balanceOf, txUrl, addrUrl, nowSec, registerShop, bookingsOfShop, currentAccount, hasWallet, deviceKey, createDeviceKey, setSigner, setPayout, setActive, transferShop } from "./chain.js";
 import { CONFIG } from "./config.js";
 import { formatUsdc, actionsFor, STATUS, escapeHtml, encodePass, parseUsdc, formatSlot, recordLabel, secondsLeft } from "./domain.js";
 import { $, msg, fail, walletBanner } from "./ui.js";
@@ -23,11 +23,12 @@ async function render() {
     <p class="muted">Owner <a class="mono" href="${addrUrl(s.owner)}">${s.owner.slice(0, 10)}…</a> · ${s.booked} booked by ${s.uniqueCustomers} guests · ${s.checkedIn} checked in · ${s.cancelled} cancelled · ${s.released} refunded by you · ${s.claimed} no-shows claimed · ${recordLabel(s, nowRec)} (public)${deviceIsSigner() ? " · this device signs check-in passes" : ""}</p>
     <div class="card row"><div class="mono">${link}</div><div><button class="ghost" id="copy">Copy booking link</button></div></div>
     ${isOwner() || !hasWallet() ? "" : `<p><button id="conn">Connect the shop wallet to manage bookings</button></p>`}`;
-  if (!hasWallet()) walletBanner($("nowallet"));
+  if (!hasWallet() && !deviceIsSigner()) walletBanner($("nowallet"));
   $("copy").onclick = async () => { try { await navigator.clipboard.writeText(link); $("copy").textContent = "Copied"; } catch { prompt("Booking link", link); } };
   $("conn")?.addEventListener("click", async () => { try { await connect(); if (!isOwner()) msg("This wallet does not own this shop.", "err"); render(); } catch (e) { fail(e); } });
   renderSettings();
-  const [list, now] = await Promise.all([bookingsOfShop(s.id), nowSec()]);
+  const list = await bookingsOfShop(s.id);
+  const now = nowRec;
   if (mySeq !== seq) return;
   $("list").innerHTML = list.map((b) => {
     const a = actionsFor({ ...b, cancelWindow: s.cancelWindow, grace: s.grace }, now);
@@ -101,9 +102,19 @@ $("qrclose").onclick = () => { $("qrbox").hidden = true; clearInterval(timer); }
 $("qrrefresh").onclick = () => pass && showPass(pass.id).catch(fail);
 $("tablet").onclick = async () => {
   if (!pass) return;
-  try { msg("Submitting the check-in from this device (you pay the ~1¢ fee)…"); const r = await checkIn(pass.id, pass.validUntil, pass.sig);
-    msg(`Checked in — deposit refunded to the guest in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); $("qrbox").hidden = true; render(); }
-  catch (e) { fail(e); }
+  try {
+    let r;
+    if (deviceIsSigner() && !walletIsSigner() && !isOwner()) {
+      const dev = deviceKey(shop.id);
+      if ((await balanceOf(dev.address)) === 0n) { msg(`This device's check-in key has no USDC for the ~1¢ fee. Send about $1 of USDC on Arc to <span class="mono">${dev.address}</span>, or let the guest submit from their phone.`, "err"); return; }
+      msg("Submitting the check-in from this device's key (~1¢ fee)…");
+      r = await checkInFromDevice(shop.id, pass.id, pass.validUntil, pass.sig);
+    } else {
+      msg("Submitting the check-in from this device (you pay the ~1¢ fee)…");
+      r = await checkIn(pass.id, pass.validUntil, pass.sig);
+    }
+    msg(`Checked in — deposit refunded to the guest in ${r.ms} ms · <a href="${txUrl(r.hash)}">tx</a>`, "ok"); $("qrbox").hidden = true; render();
+  } catch (e) { fail(e); }
 };
 $("shop").oninput = () => render().catch(fail);
 $("shop").onchange = () => render().catch(fail);

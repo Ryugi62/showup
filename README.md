@@ -31,18 +31,18 @@ never comes                            │  only after slot + grace (≥ 5 min),
 ## Why Arc
 - **One balance pays for everything.** On Arc, USDC is the gas, so the deposit and the fee come out of the same dollar balance. A guest needs no second token to book, and a shop needs no ETH to run.
 - **About a cent per action, priced in dollars, shown before you press.** Gas is USDC, so a fee in dollars is just gas × gas price, with no price oracle. Every booking shows its exact network fee in dollars before the wallet opens and the fee actually paid afterwards. That makes a $5 deposit worth protecting. The fee for every demo action is in the table above.
-- **Deterministic, sub-second finality.** Arc's BFT consensus finalizes a block once, with no reorgs, so a refund at the door is final in one block. The guest can walk to the table, and the shop never waits for "confirmations". The demo records the time from send to receipt for every action.
+- **Deterministic, sub-second finality** ([Arc docs](https://docs.arc.io)). A block is final when it is committed, so a refund at the door is final in one block. The guest can walk to the table, and the shop never waits for "confirmations". The measured send→final time for each real mainnet action is in the table above.
 - Deposits are plain `msg.value` in Arc's native USDC (18 decimals), so booking is one transaction with no token approval.
 
 ## Trust model and guarantees
 - **No admin key, no upgrade path.** The deployer cannot move a deposit.
 - **The shop attests attendance** by signing the guest's pass. A shop could withhold the pass and claim anyway. So each shop's record is public and kept on chain in `shopStats`: when it registered, how many different guests booked, and how many bookings were checked in, cancelled, refunded by the shop, reclaimed or claimed. The pages show the claim rate before anyone books: claimed ÷ (checked in + claimed), so cancellations can't dilute it. A percentage is shown only after 10 settled bookings from at least 10 different guests and 30 days of history. Before that, the page says "new shop — not enough history". A shop can't book its own slots (owner, payout and signer are refused). Even so, the rate is a soft signal, not proof, since someone can still book from other wallets. The pages also show the owner address, so a guest can tell a real shop from a copy with the same name.
 - **Terms are fixed at registration.** Deposit, free-cancel window and grace can't change under an existing booking. Grace is 5 minutes to 1 day, the cancel window is at most 30 days, and a slot must start between one minute and one year after booking, so "only after slot + grace" always means something.
-- **Passes.** A pass is bound to one booking, this contract and this chain (EIP-712 domain), and to an expiry; the pages issue 3-minute passes that count down in chain time. A pass works once, and high-`s` (malleable) signatures are rejected. The signer can be a plain key or an EIP-7702 delegated account, which is verified by `ecrecover` first. It can also be a smart-contract wallet via EIP-1271, which gets a 50k gas cap and at most 32 bytes of return data. A pass is a bearer token for its 3 minutes, but the refund always goes to the wallet that booked.
-- **Keys.** The owner can move pass signing to a separate check-in key kept on the shop's tablet ("Use a key on this device"). That key signs passes without a wallet prompt, and a tablet holding only that key can issue passes. It can only authorize check-ins, which refund the guest who booked; it can never claim, pause, change settings or withdraw. The key is stored in the tablet's browser storage. If site data is cleared, the owner presses "Reset check-in key to this wallet" or creates a new one. At worst, a stolen key can authorize check-ins (refunds to the real guests) until the owner rotates it. Owners can also change the payout address, pause bookings or transfer the shop.
+- **Passes.** A pass is bound to one booking, this contract and this chain (EIP-712 domain), and to an expiry; the pages issue 3-minute passes that count down in chain time. A pass works once, and high-`s` (malleable) signatures are rejected. The signer can be a plain key or an EIP-7702 delegated account, which is verified by `ecrecover` first. It can also be a smart-contract wallet via EIP-1271, which gets a 150k gas cap and at most 32 bytes of return data. A pass is a bearer token for its 3 minutes, but the refund always goes to the wallet that booked.
+- **Keys.** The owner can move pass signing to a separate check-in key kept on the shop's tablet ("Use a key on this device"). That key signs passes without a wallet prompt. A tablet holding only that key, with no wallet app at all, can issue passes. With about $1 of USDC for fees, it can also submit check-ins itself. It can only authorize check-ins, which refund the guest who booked; it can never claim, pause, change settings or withdraw. The key is stored in the tablet's browser storage. If site data is cleared, the owner presses "Reset check-in key to this wallet" or creates a new one. At worst, a stolen key can authorize check-ins (refunds to the real guests) until the owner rotates it. Owners can also change the payout address, pause bookings or transfer the shop.
 - **Claim deadline and escape hatch.** A shop must claim a no-show within 30 days after slot + grace. After that, or if the shop vanished, the guest can `reclaim` a still-held deposit.
 - **Payouts can't get stuck.** A payout is pushed with a gas cap. If the transfer fails (for example, a recipient contract that reverts or needs more gas), the amount is parked as a withdrawable credit (`owed`, `withdraw`), and the booking still settles.
-- **Guest-side checks.** The shop's booking link carries its owner address. If the shop number and the owner don't match, `book.html` shows a red warning and won't book.
+- **Guest-side checks.** The shop's booking link carries its owner address. If the shop number and the owner don't match, `book.html` stops and warns, and the guest must confirm to continue (a shop transfer also triggers it). This catches altered or mistyped links. It doesn't catch a copycat shop handing out its own link, which is why the owner address and the shop's age and record are shown too.
 - **Accounting.** The contract balance always equals deposits held plus credits owed, plus anything force-sent to it. Foundry invariants check this over random sequences of book, cancel, check-in, release, claim, reclaim, force-send, withdraw and time travel (256 runs × depth 100). One of the random customers is a contract that refuses pushed refunds, so the `owed`/`withdraw` path is exercised too. The shop counters always match the per-state counts.
 
 ## Verify it in two minutes
@@ -52,11 +52,12 @@ never comes                            │  only after slot + grace (≥ 5 min),
 ```bash
 npm install
 forge test                     # 44 unit/fuzz tests + 3 invariants
-node --test tests/*.test.mjs   # web domain helpers + ABI sync
+node --test tests/*.test.mjs   # web domain helpers, ABI sync, CSP of every page
 npm run e2e                    # Anvil (chain id 5042): deploy, book, check in, no-show, claim
 node scripts/smoke-web.mjs     # the real pages in headless Chromium with an injected wallet:
                                # register shop → device check-in key → book → QR → guest check-in →
-                               # wallet-less phone path → tablet check-in → no-show claim → public record
+                               # wallet-less phone path → tablet check-in → wallet-free counter tablet
+                               # (device key only) → altered-link warning → no-show claim → public record
 ```
 
 ## Pages
@@ -73,7 +74,7 @@ Every page sends a strict Content-Security-Policy (`script-src 'self'`, no inlin
 ## Status and next
 This is a proof of concept, and it is not audited. With a microgrant, the next four weeks would be:
 1. A pilot with 3 shops. The measure is the no-show rate before and after, and the share of deposits refunded at the door.
-2. Gas sponsorship for the shop tablet, so that every check-in is submitted by the shop and guests never pay gas. Today the tablet can already submit check-ins, paying from the owner wallet.
+2. Gas sponsorship for the shop tablet, so its key never needs topping up. Today the tablet already submits check-ins from its own key or the owner wallet, so guests never pay gas.
 3. A card-to-USDC on-ramp for guests without a wallet.
 4. A webhook for common booking tools, so a deposit is requested automatically.
 

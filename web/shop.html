@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://rpc.mainnet.arc.io http://127.0.0.1:8547 http://127.0.0.1:8548; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://rpc.mainnet.arc.io; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>For shops — ShowUp</title><link rel="stylesheet" href="style.css">
 <script src="vendor/qrcode.js"></script></head>
 <body><main>
@@ -22,7 +22,7 @@
 <h2>Shop settings</h2>
 <div class="card">
   <div class="row"><div><b>Check-in key</b><div class="muted" id="signerInfo"></div></div><div><button class="ghost" id="mkdev">Use a key on this device</button> <button class="ghost" id="resetSigner" hidden>Reset check-in key to this wallet</button></div></div>
-  <p class="muted">Keep the owner wallet off the counter: a separate check-in key on the shop's tablet signs passes without a wallet prompt. It can only authorize check-ins (which refund the guest who booked) — never claim, pause, change settings or withdraw. It is stored in this browser; if site data is cleared, create a new one here.</p>
+  <p class="muted">Keep the owner wallet off the counter: a separate check-in key on the shop's tablet signs passes without a wallet prompt. It can only authorize check-ins (which refund the guest who booked) — never claim, pause, change settings or withdraw. It is stored in this browser only — create it in the browser the tablet will use at the counter. If site data is cleared, create a new one here. To submit check-ins without any wallet, send the key about $1 of USDC for fees.</p>
 </div>
 <div class="card">
   <label for="payout">Payout address</label><input id="payout" class="mono">

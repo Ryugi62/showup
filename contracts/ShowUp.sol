@@ -60,6 +60,7 @@ contract ShowUp {
     error TooLateToCancel();
     error TooLate();
     error TooEarly();
+    error ClaimWindowClosed();
     error BadPass();
     error PassExpired();
     error NothingOwed();
@@ -243,7 +244,7 @@ contract ShowUp {
         if (msg.sender != s.owner) revert NotAllowed();
         if (block.timestamp < uint256(b.slotStart) + s.grace) revert TooEarly();
         // claim window closes when the guest's reclaim opens — no race between the two
-        if (block.timestamp >= uint256(b.slotStart) + s.grace + RECLAIM_AFTER) revert TooLate();
+        if (block.timestamp >= uint256(b.slotStart) + s.grace + RECLAIM_AFTER) revert ClaimWindowClosed();
         uint256 amount = b.amount;
         b.status = Status.Claimed;
         totalHeld -= amount;

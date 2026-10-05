@@ -44,7 +44,7 @@ Arc is the reason this works: gas is paid in USDC (about one cent, priced in dol
 - G owner, payout or signer of the shop · W book · T revert `NotAllowed` (no self-booking).
 - G slot more than 365 days ahead · W book · T revert `SlotTooFar`.
 - G signer is an EIP-7702 delegated EOA (has code) · W check in with its key's signature · T `Refunded`.
-- G signer contract burns gas in `isValidSignature` · W check in · T revert `BadPass` within the 50k cap; booking still cancellable/refundable.
+- G signer contract burns gas in `isValidSignature` · W check in · T revert `BadPass` within the 150k cap; booking still cancellable/refundable.
 - G any sequence of actions · T contract balance = totalHeld + totalOwed (+ forced transfers), and shopStats equals the per-state counts.
 
 ## Non-goals

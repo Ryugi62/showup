@@ -16,10 +16,13 @@ async function loadShop() {
   if (!s.exists) { $("title").textContent = "Book a slot"; $("terms").textContent = "No shop with that number."; return; }
   if (!s.active) { $("title").textContent = s.name; $("terms").textContent = "This shop is not taking bookings right now."; return; }
   const expectOwner = q.get("owner");
-  if (expectOwner && expectOwner.toLowerCase() !== s.owner.toLowerCase() && String(s.id) === (q.get("shop") || "")) {
+  const linkShop = q.get("shop");
+  if (expectOwner && !linkShop) { $("terms").textContent = "This link has an owner but no shop number, so it can't be checked. Ask the shop for its link again."; return; }
+  if (expectOwner && linkShop === String(s.id) && expectOwner.toLowerCase() !== s.owner.toLowerCase()) {
     $("title").textContent = s.name;
-    $("terms").innerHTML = `<b class="danger">This shop's owner does NOT match the link you were given.</b> The link says <span class="mono">${escapeHtml(expectOwner)}</span>, but shop #${s.id} belongs to <span class="mono">${s.owner}</span>. Don't book — ask the shop for its link again.`;
-    return;
+    $("terms").innerHTML = `<b class="danger">This shop's owner does not match the link you were given.</b> The link says <span class="mono">${escapeHtml(expectOwner)}</span>, but shop #${s.id} now belongs to <span class="mono">${s.owner}</span>. That happens if the shop was transferred, or if the link was altered. <button class="ghost" id="anyway">I trust this shop — continue</button>`;
+    await new Promise((resolve) => { $("anyway").onclick = resolve; });
+    if (mySeq !== seq) return;
   }
   shop = s;
   $("title").textContent = `Book at ${s.name}`;

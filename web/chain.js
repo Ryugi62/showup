@@ -157,6 +157,20 @@ export function createDeviceKey(shopId) {
   return privateKeyToAccount(pk);
 }
 
+/** Submit a check-in from the tablet's own device key (no browser wallet needed); the key pays the ~1¢ fee. */
+export async function checkInFromDevice(shopId, bookingId, validUntil, sig) {
+  const dev = deviceKey(shopId);
+  if (!dev) throw new Error("No check-in key on this device.");
+  const w = createWalletClient({ account: dev, chain: arc, transport: http(CONFIG.rpc) });
+  const { request } = await pub.simulateContract({ address: address(), abi, functionName: "checkIn", args: [BigInt(bookingId), BigInt(validUntil), sig], account: dev });
+  const hash = await w.writeContract(request);
+  const t0 = performance.now();
+  const receipt = await pub.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("Transaction reverted");
+  return { hash, ms: Math.round(performance.now() - t0), receipt };
+}
+export const balanceOf = (a) => pub.getBalance({ address: a });
+
 /** Sign with the device key if it is the shop's current signer; otherwise with the connected wallet. */
 export async function signPass(bookingId, validUntil, shop) {
   const td = passTypedData({ chainId: CONFIG.chainId, contract: address(), bookingId, validUntil });

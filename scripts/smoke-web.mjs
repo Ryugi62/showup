@@ -24,6 +24,11 @@ try {
   });
   const dir = mkdtempSync(join(tmpdir(), "showup-web-"));
   cpSync(new URL("../web", import.meta.url).pathname, dir, { recursive: true });
+  // local run: let the pages reach Anvil (the shipped CSP allows only the Arc RPC)
+  for (const f of ["index.html", "book.html", "shop.html", "checkin.html"]) {
+    const fp = join(dir, f);
+    writeFileSync(fp, readFileSync(fp, "utf8").replace("connect-src 'self' https://rpc.mainnet.arc.io", `connect-src 'self' https://rpc.mainnet.arc.io ${rpc}`));
+  }
   writeFileSync(join(dir, "config.js"), `export const CONFIG = { chainId: 5042, chainName: "Arc (local)", rpc: "${rpc}", explorer: "https://explorer.arc.io", contract: "${out.address}", demoShopId: 1 };\n`);
   const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
   server = createServer((req, res) => {
@@ -115,6 +120,28 @@ try {
   await phone.screenshot({ path: new URL("../docs/smoke-phone-nowallet.png", import.meta.url).pathname });
   await shopPage.click("#tablet");
   await shopPage.waitForFunction(() => document.getElementById("msg").textContent.includes("Checked in"), null, { timeout: 20000 });
+  // a counter tablet with no wallet app at all: only the device key (same browser storage), funded for fees
+  const tabletCtx = await browser.newContext({ storageState: await ctxOwner.storageState() });
+  const tablet = await tabletCtx.newPage(); pages.tablet = tablet;
+  tablet.on("pageerror", (e) => errors.push("tablet: " + e.message)); cspWatch(tablet, "tablet");
+  tablet.on("dialog", (d) => d.accept());
+  await guestPage.goto(`http://127.0.0.1:${WEB}/book.html?shop=${newShop}`);
+  await guestPage.waitForFunction(() => document.getElementById("terms").textContent.includes("0.2 USDC"));
+  await setSlot((await chainNow()) + 2 * 3600);
+  await guestPage.click("#go");
+  await guestPage.waitForFunction(() => document.getElementById("msg").textContent.includes("Booked"), null, { timeout: 20000 });
+  await tablet.goto(`http://127.0.0.1:${WEB}/shop.html?shop=${newShop}`);
+  await tablet.waitForSelector("[data-pass]", { timeout: 20000 });
+  if (!(await tablet.isHidden("#nowallet"))) throw new Error("device-key tablet should not see the wallet banner");
+  const devAddr = await tablet.evaluate(() => { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("showup.checkin.")) return k; } return null; });
+  if (!devAddr) throw new Error("device key not in tablet storage");
+  await tablet.click("[data-pass]"); await tablet.waitForSelector("#qr svg");
+  await tablet.click("#tablet");
+  await tablet.waitForFunction(() => document.getElementById("msg").textContent.includes("no USDC"), null, { timeout: 20000 }); // unfunded key: clear message
+  const keyAddr = await tablet.evaluate(() => document.querySelector("#msg .mono").textContent);
+  await call("anvil_setBalance", [keyAddr, "0xDE0B6B3A7640000"]); // 1 USDC for fees
+  await tablet.click("#tablet");
+  await tablet.waitForFunction(() => document.getElementById("msg").textContent.includes("Checked in"), null, { timeout: 20000 });
   // second booking → no-show → owner claims after grace
   await guestPage.goto(`http://127.0.0.1:${WEB}/book.html?shop=${newShop}`);
   steps.push(90); await guestPage.waitForFunction(() => document.getElementById("terms").textContent.includes("0.2 USDC"));
@@ -125,8 +152,12 @@ try {
   steps.push(95); await shopPage.reload(); await shopPage.waitForSelector("[data-claim]", { timeout: 20000 });
   await shopPage.click("[data-claim]");
   steps.push(97); await shopPage.waitForFunction(() => document.getElementById("msg").textContent.includes("Claimed"), null, { timeout: 20000 });
-  steps.push(98); await shopPage.reload(); await shopPage.waitForFunction(() => document.getElementById("head").textContent.includes("2 checked in") && document.getElementById("head").textContent.includes("1 no-shows claimed"), null, { timeout: 20000 });
+  steps.push(98); await shopPage.reload(); await shopPage.waitForFunction(() => document.getElementById("head").textContent.includes("3 checked in") && document.getElementById("head").textContent.includes("1 no-shows claimed"), null, { timeout: 20000 });
   await shopPage.screenshot({ path: new URL("../docs/smoke-shop.png", import.meta.url).pathname, fullPage: true });
+  // an altered link (wrong owner) stops and warns before booking
+  await guestPage.goto(`http://127.0.0.1:${WEB}/book.html?shop=${newShop}&owner=0x0000000000000000000000000000000000000001`);
+  await guestPage.waitForSelector("#anyway", { timeout: 20000 });
+  if (!(await guestPage.isDisabled("#go"))) throw new Error("booking must stay disabled on owner mismatch");
   // a plain browser (no wallet) on the check-in link gets the "open in wallet app" path, not a dead button
   const plain = await (await browser.newContext()).newPage();
   await plain.goto(`http://127.0.0.1:${WEB}/checkin.html#p=${out.address}.1.1.0x${"ab".repeat(65)}`);

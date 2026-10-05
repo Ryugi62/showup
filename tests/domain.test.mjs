@@ -84,7 +84,7 @@ test("recordLabel withholds a percentage for thin or young records", () => {
   const day = 86400;
   assert.match(recordLabel({ checkedIn: 2, claimed: 0, since: 0 }, 100 * day), /new shop/);
   assert.match(recordLabel({ checkedIn: 20, claimed: 5, since: 90 * day }, 100 * day), /new shop/); // 10 days old
-  assert.equal(recordLabel({ checkedIn: 18, claimed: 2, since: 0, uniqueCustomers: 15 }, 100 * day), "claim rate 10% over 20 guests who reached their slot (recorded on chain)");
+  assert.equal(recordLabel({ checkedIn: 18, claimed: 2, since: 0, uniqueCustomers: 15 }, 100 * day), "claim rate 10% over 20 bookings that reached their slot (recorded on chain)");
   assert.match(recordLabel({ checkedIn: 18, claimed: 2, since: 0, uniqueCustomers: 3 }, 100 * day), /new shop/); // sybil-thin
 });
 

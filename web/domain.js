@@ -83,6 +83,7 @@ export const ERROR_TEXT = {
   TooLateToCancel: "The free-cancel window has closed for this booking.",
   TooLate: "Check-in closed: the grace period after the slot has passed.",
   TooEarly: "Too early: the shop can claim only after the slot plus the grace period.",
+  ClaimWindowClosed: "The 30-day claim window for this no-show has closed; the guest can now take the deposit back.",
   BadPass: "This check-in pass was not signed by the shop's current check-in key, or is for another booking.",
   PassExpired: "This check-in pass expired. Ask the shop to show a fresh QR.",
   NothingOwed: "Nothing to withdraw for this wallet.",
@@ -122,7 +123,7 @@ export function recordLabel({ checkedIn, claimed, since, uniqueCustomers = 0 }, 
   const young = Number(nowSec) - Number(since) < MIN_AGE_SEC;
   if (settled < MIN_HISTORY || Number(uniqueCustomers) < MIN_GUESTS || young)
     return `new shop — not enough history yet (${settled} settled, ${uniqueCustomers} guests, ${young ? "under 30 days old" : "30+ days old"})`;
-  return `claim rate ${claimRate(checkedIn, claimed)}% over ${settled} guests who reached their slot (recorded on chain)`;
+  return `claim rate ${claimRate(checkedIn, claimed)}% over ${settled} bookings that reached their slot (recorded on chain)`;
 }
 
 /** Arc gas is priced in USDC, so a fee in dollars is just gas × gasPrice — no price oracle. */
