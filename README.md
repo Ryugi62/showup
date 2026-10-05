@@ -9,9 +9,9 @@
 ## In plain terms
 | | Card deposit (typical online rate) | ShowUp on Arc |
 |---|---|---|
-| Guest books a $5 slot | $5 held; shop pays 2.9% + 30¢ ≈ **$0.45** ([Stripe](https://stripe.com/pricing)) | $5 locked in USDC + network fee ≈ **$0.003**, paid by the guest (shown before booking) |
-| Guest shows up | refund takes **5–10 business days** ([Stripe](https://support.stripe.com/questions/refunds-faq)) and the fee isn't returned | $5 back **at the door**, final in one block; the shop's tablet can pay the ≈$0.002 fee |
-| Guest never comes | shop keeps $5 minus fees, may face a chargeback | shop claims $5 after the grace period; no chargebacks |
+| Guest books a $5 slot | $5 held; shop pays 2.9% + 30¢ ≈ **$0.45** ([Stripe](https://stripe.com/pricing)) | $5 locked in USDC + network fee ≈ **$0.005** (≈214–308k gas at Arc's 20 gwei floor, measured locally; shown before booking) |
+| Guest shows up | refund takes **5–10 business days** ([Stripe](https://support.stripe.com/questions/refunds-faq)) and the fee isn't returned | $5 back **at the door**, final in one block; the shop's tablet can pay the ≈$0.001 fee (≈62k gas) |
+| Guest never comes | shop keeps $5 minus fees, may face a chargeback | shop claims $5 after the grace period (≈$0.001 fee); no chargebacks |
 | What the guest must hold | a card | **USDC only.** On Arc the gas is USDC, so there is no second token. On most EVM chains a guest without a paymaster would also need ETH for gas. |
 | Fee predictability | % of the amount | priced in dollars (Arc's base fee is denominated in USDC), so a shop can budget it per guest |
 
