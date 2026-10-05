@@ -6,6 +6,17 @@
 
 **Try it (no wallet needed to look):** https://ryugi62.github.io/showup/ · **Code:** this repo · **Builder:** [github.com/Ryugi62](https://github.com/Ryugi62)
 
+## In plain terms
+| | Card deposit (typical online rate) | ShowUp on Arc |
+|---|---|---|
+| Guest books a $5 slot | $5 held; shop pays 2.9% + 30¢ ≈ **$0.45** ([Stripe](https://stripe.com/pricing)) | $5 locked in USDC + network fee ≈ **$0.003**, paid by the guest (shown before booking) |
+| Guest shows up | refund takes **5–10 business days** ([Stripe](https://support.stripe.com/questions/refunds-faq)) and the fee isn't returned | $5 back **at the door**, final in one block; the shop's tablet can pay the ≈$0.002 fee |
+| Guest never comes | shop keeps $5 minus fees, may face a chargeback | shop claims $5 after the grace period; no chargebacks |
+| What the guest must hold | a card | **USDC only.** On Arc the gas is USDC, so there is no second token. On most EVM chains a guest without a paymaster would also need ETH for gas. |
+| Fee predictability | % of the amount | priced in dollars (Arc's base fee is denominated in USDC), so a shop can budget it per guest |
+
+No-shows are not rare: one booking platform recorded 283,728 no-show covers across 2,417 restaurants in a year ([Resos No-Show Index](https://resos.com/restaurant-no-show-rate/)).
+
 ## Arc mainnet
 <!-- MAINNET:START -->
 _Filled in by `scripts/deploy-mainnet.mjs` with the contract address, each demo transaction, its gas, fee in USDC and send→final time._
@@ -28,8 +39,8 @@ never comes                            │  only after slot + grace (≥ 5 min),
                                           (not claimed by then → the guest can reclaim it)
 ```
 
-## Why Arc
-- **One balance pays for everything.** On Arc, USDC is the gas, so the deposit and the fee come out of the same dollar balance. A guest needs no second token to book, and a shop needs no ETH to run.
+## Why Arc (the wedge)
+- **One asset to onboard.** Small-shop guests won't buy two tokens to put down $5. On Arc, USDC is the gas, so the deposit and the fee come out of the same dollar balance, and a shop's tablet runs on a dollar or two of USDC. On an ETH-gas chain, the same flow needs a second asset or a paymaster for every guest.
 - **About a cent per action, priced in dollars, shown before you press.** Gas is USDC, so a fee in dollars is just gas × gas price, with no price oracle. Every booking shows its exact network fee in dollars before the wallet opens and the fee actually paid afterwards. That makes a $5 deposit worth protecting. The fee for every demo action is in the table above.
 - **Deterministic, sub-second finality** ([Arc docs](https://docs.arc.io)). A block is final when it is committed, so a refund at the door is final in one block. The guest can walk to the table, and the shop never waits for "confirmations". The measured send→final time for each real mainnet action is in the table above.
 - Deposits are plain `msg.value` in Arc's native USDC (18 decimals), so booking is one transaction with no token approval.
